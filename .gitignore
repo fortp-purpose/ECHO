@@ -1,0 +1,35 @@
+# Node.js dependencies
+
+node_modules/
+
+# Frontend build output
+
+frontend/dist/
+
+# Java build output
+
+backend/target/
+
+# Environment variables and secrets
+
+.env
+.env.*
+!.env.example
+
+# Java keystores and private keys
+
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs and temporary files
+
+*.log
+.DS_Store
+Thumbs.db
+
+# IDE settings
+
+.vscode/
+.idea/
