@@ -1,0 +1,42 @@
+# Git
+.git
+.gitignore
+
+# Maven
+target/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Logs
+*.log
+logs/
+
+# Test reports
+target/surefire-reports/
+target/failsafe-reports/
+
+# Dependency cache
+.m2/
+
+# Local development
+.env
+.env.local
+*.local
+
+# Frontend (not needed for backend build)
+../frontend/
+../docs/
+../*.md
+../ECHO.pdf

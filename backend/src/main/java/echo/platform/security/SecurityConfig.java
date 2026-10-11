@@ -37,8 +37,7 @@ public class SecurityConfig {
                     response.setCharacterEncoding("UTF-8");
                     response.getWriter().write("{\"code\":\"UNAUTHENTICATED\",\"status\":401,\"message\":\"Unauthenticated\"}");
                 })
-            )
-            .cors(cors -> cors.disable());
+            );
 
         return http.build();
     }
