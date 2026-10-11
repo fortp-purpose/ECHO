@@ -9,6 +9,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.Instant;
 import java.util.Map;
@@ -17,6 +20,29 @@ import java.util.Map;
 public class ApiExceptionHandler {
     private static final Logger log =
             LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiError> handleNoResourceFound(
+            NoResourceFoundException exception,
+            HttpServletRequest request
+    ) {
+        Object value = request.getAttribute(
+                CorrelationIdFilter.ATTRIBUTE_NAME
+        );
+        String correlationId =
+                value instanceof String id ? id : "unavailable";
+
+        ApiError body = new ApiError(
+                "NOT_FOUND",
+                HttpStatus.NOT_FOUND.value(),
+                "The requested resource was not found.",
+                Map.of(),
+                correlationId,
+                Instant.now()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(body);
+    }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiError> handleValidationException(
@@ -45,6 +71,29 @@ public class ApiExceptionHandler {
                 HttpStatus.BAD_REQUEST.value(),
                 "One or more fields failed validation.",
                 details,
+                correlationId,
+                Instant.now()
+        );
+
+        return ResponseEntity.badRequest().body(body);
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiError> handleTypeMismatchException(
+            MethodArgumentTypeMismatchException exception,
+            HttpServletRequest request
+    ) {
+        Object value = request.getAttribute(
+                CorrelationIdFilter.ATTRIBUTE_NAME
+        );
+        String correlationId =
+                value instanceof String id ? id : "unavailable";
+
+        ApiError body = new ApiError(
+                "VALIDATION_ERROR",
+                HttpStatus.BAD_REQUEST.value(),
+                "A path or query parameter has an invalid format.",
+                Map.of(),
                 correlationId,
                 Instant.now()
         );

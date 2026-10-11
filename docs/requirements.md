@@ -230,7 +230,7 @@ The following are present in the project brief or in common practice, but are **
 | **Embeddings / vector similarity** | Not mentioned. PDF says "identify similar music" but no mechanism | `[ENG]` | ai-strategy.md, ADR-004 |
 | **Collaborative filtering** | Not mentioned | `[ENG]` | ai-strategy.md |
 | **Migrate tool for schema changes** | Not mentioned | `[ENG]` | ADR-003 |
-| **OpenAPI / generated API contract** | Not mentioned | `[ENG]` | ADR-010 |
+| **OpenAPI contract (hand-authored, validated)** | Not mentioned | `[ENG]` | ADR-010; tooling resolved ADR-022 |
 | **Observability stack (metrics/tracing)** | Not mentioned | `[ENG]` | deployment-strategy.md |
 | **Cloud provider** | Not mentioned | `[ENG]` / `[OPEN]` | deployment-strategy.md |
 | **Rate limiting** | Not mentioned | `[ENG]` | api-strategy.md, security-strategy.md |
@@ -324,7 +324,7 @@ ECHO.pdf does not state the following. They must not be presented as PDF require
 
 ---
 
-## 9. Unresolved decisions requiring human approval
+## 9. Decisions requiring human approval
 
 | ID | Decision | Why it is open |
 |---|---|---|
@@ -336,10 +336,12 @@ ECHO.pdf does not state the following. They must not be presented as PDF require
 | `OPEN-06` | Personalization opt-out semantics | PDF requires controls but does not define them. |
 | `OPEN-07` | Cloud/deployment target | Not determined by PDF. Blocks Phase 27. |
 | `OPEN-08` | Moderation and abuse policy | Not addressed in PDF. Blocks Phase 23. |
-| `OPEN-09` | Whether reaction history is persisted or ephemeral | Not addressed in PDF. Affects domain model sign-off in Phase 5. |
-| `OPEN-10` | Whether `Favorite` is a separate entity or a `LibraryItem` subtype | Not addressed in PDF. Affects domain model sign-off in Phase 5. |
-| `OPEN-11` | Whether `AIRequest`/`AIResult` are separate entities or one interaction log | Not addressed in PDF. Affects domain model sign-off in Phase 5. |
+| `OPEN-09` | Whether reaction history is persisted or ephemeral | **RESOLVED — ephemeral (Redis TTL), ADR-017.** Was not addressed by PDF. Approval recorded 2026-10-11, **ADR-021**. |
+| `OPEN-10` | Whether `Favorite` is a separate entity or a `LibraryItem` subtype | **RESOLVED — unified `LibraryItem` + `type` discriminator, ADR-018.** Was not addressed by PDF. Approval recorded 2026-10-11, **ADR-021**. |
+| `OPEN-11` | Whether `AIRequest`/`AIResult` are separate entities or one interaction log | **RESOLVED — single `AIInteraction`, ADR-019.** Was not addressed by PDF. Approval recorded 2026-10-11, **ADR-021**. |
 | `OPEN-12` | Free-tier language-learning / AI provider with acceptable verified terms | Not determined by PDF. Interacts with §7.2. |
+
+**Approval record.** `OPEN-09`, `OPEN-10`, and `OPEN-11` were resolved by **explicit human approval recorded 2026-10-11 12:43 +05:30** (approver: project owner, human operator). The decisions are ADR-017 (reactions ephemeral), ADR-018 (unified `LibraryItem` + `type` discriminator), and ADR-019 (single `AIInteraction`); the approval itself is recorded in **ADR-021** (`docs/architecture-decisions.md`). `OPEN-01`–`OPEN-08` and `OPEN-12` remain unresolved and are unaffected. Resolving these three does **not** resolve any of the others. Non-architectural `OPEN-09` parameters — Redis TTL duration, per-user rate-limit window, and reaction-type allowlist — remain deferred to Phase 18 (ADR-017).
 
 ---
 

@@ -1,10 +1,10 @@
 # ECHO — API Strategy
 
 **Project:** ECHO — Engaging Collaborative Hub for Online Music
-**Phase:** 1 — Architecture (documentation only)
+**Phase:** 6 — API contract and validation gate
 
-> **NO CONTROLLERS, ENDPOINTS, OR ROUTES ARE IMPLEMENTED IN THIS PHASE.**
-> This document defines REST boundaries and conventions only. Every endpoint listed below is a **proposal**, not a commitment, and none exists in code.
+> **THE CONTRACT NOW EXISTS AND IS VALIDATED (Phase 6).**
+> `docs/contract/openapi.yaml` (OpenAPI 3.0.3) is the source of truth for the REST surface, checked by test gates in both stacks (ADR-022). **One read-only resource slice is implemented (Phase 5.1):** the infrastructure health check `GET /api/health` (plain text) and the read-only catalogue slice in §7.3 (`/api/v1/catalog/...`). Every other resource endpoint listed below is a **proposal**, not a commitment, and appears in the contract (if at all) marked `x-echo-implemented: false`. No write/business endpoint exists yet.
 
 ## Tag legend
 
@@ -25,7 +25,7 @@
 |---|---|---|
 | P1 | **Resources, not actions** | `/api/v1/playlists/{id}` not `/api/v1/playlistActions`. Predictable, cacheable, loggable. |
 | P2 | **Thin controllers** | Controllers translate HTTP → application call → response. Zero business logic, zero entity exposure. |
-| P3 | **The contract is the source of truth** | Frontend and backend are validated against one contract. Drift is a CI failure, not a bug report. |
+| P3 | **The contract is the source of truth** | Frontend and backend are validated against `docs/contract/openapi.yaml`. Drift fails the build (ADR-022), not a bug report. |
 | P4 | **Errors are part of the contract** | A documented, stable machine-readable code for every failure mode — including `CATALOG_PROVIDER_UNAVAILABLE`. |
 | P5 | **REST for state, STOMP for immediacy** | Do not model room interaction as REST polling. (ADR-006, `realtime-strategy.md`) |
 | P6 | **Authenticated by default** | Public endpoints are an explicit, reviewed allowlist — never the default. |
@@ -46,8 +46,7 @@ Grouped to mirror the domain modules (architecture §5.3) and ECHO.pdf §5 capab
 | Users | `/api/v1/users` | identity | §1 profiles | 7, 13 |
 | Catalog | `/api/v1/catalog` | catalog | §5 Music Streaming | 9 |
 | Search | `/api/v1/search` | catalog | §5 Search | 9 |
-| Library | `/api/v1/library` | library | §5 Personal library | 11 |
-| Favorites | `/api/v1/favorites` | library | §5 Favorites | 11 |
+| Library | `/api/v1/library` | library | §5 Personal library + Favorites (ADR-018) | 11 |
 | History | `/api/v1/history` | library | §5 Listening history | 11 |
 | Playlists | `/api/v1/playlists` | playlist | §5 Playlists | 12 |
 | Social | `/api/v1/social` | social | §5 Social Music | 13 |
@@ -137,30 +136,35 @@ Examples: `?provider=<providerId>` (any value other than a registered provider i
 ## 4. Error format
 
 ### 4.1 Envelope `[ENG]`
+The envelope is **flat** — the error object *is* the response body (serialised from `echo.platform.api.ApiError`), not nested under an `"error"` key.
 ```json
 {
-  "error": {
-    "code": "CATALOG_PROVIDER_UNAVAILABLE",
-    "message": "Music catalogue is currently unavailable.",
-    "status": 503,
-    "correlationId": "01J8X...",
-    "details": [ { "field": "durationMs", "issue": "exceeds maximum of 120000" } ]
-  }
+  "code": "CATALOG_PROVIDER_UNAVAILABLE",
+  "status": 503,
+  "message": "Music catalogue is currently unavailable.",
+  "details": {},
+  "correlationId": "01J8X...",
+  "timestamp": "2026-10-11T08:17:43.320Z"
 }
 ```
+`details` is a JSON **object** (field name → issue message), present for validation errors (e.g. `{ "durationMs": "exceeds maximum of 120000" }`) and empty otherwise.
 
 Rules:
 1. `code` — stable, uppercase, documented. **Never reused for a different meaning.**
-2. `message` — safe to display to a user. No internals.
-3. `details` — structured field-level issues for validation errors only.
-4. `correlationId` — matches logs and traces (architecture §18.1).
-5. **Never** include: stack traces, SQL fragments, internal hostnames, provider or model names, other users' data.
+2. `status` — the HTTP status number, repeated in the body for clients.
+3. `message` — safe to display to a user. No internals.
+4. `details` — object of field-level issues for validation errors only; `{}` otherwise.
+5. `correlationId` — matches the `X-Correlation-Id` header, logs, and traces (architecture §18.1).
+6. `timestamp` — ISO-8601 UTC instant.
+7. **Never** include: stack traces, SQL fragments, internal hostnames, provider or model names, other users' data.
+
+> The machine-readable form of this envelope is the `ApiError` schema in `docs/contract/openapi.yaml` (ADR-022).
 
 ### 4.2 Code catalogue `[ENG]`
 
 | Code | Status | Meaning |
 |---|---|---|
-| `VALIDATION_FAILED` | 400 | Request body/query invalid |
+| `VALIDATION_ERROR` | 400 | Request body/query invalid |
 | `MALFORMED_REQUEST` | 400 | Unparseable body |
 | `UNAUTHENTICATED` | 401 | Missing/invalid/expired token |
 | `TOKEN_EXPIRED` | 401 | Access token expired — client refreshes |
@@ -293,6 +297,17 @@ Profiles and activity **public**; listening history **private**; playlists priva
 
 All return **`CATALOG_PROVIDER_UNAVAILABLE`** while no provider is verified.
 
+**Implemented subset — Phase 5.1 `[ENG]`.** A minimal read-only slice of §7.3 ships in Phase 5.1, with **zero provider adapters**:
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| `GET` | `/api/v1/catalog/tracks/{trackId}` | Optional | Single track |
+| `GET` | `/api/v1/catalog/artists/{artistId}` | Optional | Single artist |
+| `GET` | `/api/v1/catalog/albums/{albumId}` | Optional | Single album |
+| `GET` | `/api/v1/catalog/albums/{albumId}/tracks` | Optional | Tracks of one album — **not yet paginated** |
+
+Behaviour (ADR-015): no `active` provider ⇒ `503 CATALOG_PROVIDER_UNAVAILABLE`; active provider + unknown id ⇒ `404 NOT_FOUND`; row whose serving provider is not `active` ⇒ `503`. Malformed `{id}` (non-UUID) ⇒ `400 VALIDATION_ERROR`. Remaining §7.3 endpoints (context, artist album/track listings, streaming) and pagination stay in **Phase 9**.
+
 ### 7.4 Search `[ENG]` — Phase 9
 | Method | Path | Auth | Notes |
 |---|---|---|---|
@@ -304,15 +319,14 @@ All return **`CATALOG_PROVIDER_UNAVAILABLE`** while no provider is verified.
 ### 7.5 Library / favorites / history `[ENG]` — Phase 11
 | Method | Path | Auth | Notes |
 |---|---|---|---|
-| `GET` | `/library` | Yes | Cursor |
-| `POST` | `/library` | Yes | Idempotent via unique constraint |
-| `DELETE` | `/library/{trackId}` | Yes | |
-| `GET` | `/favorites` | Yes | Subject: track or album |
-| `PUT` | `/favorites/{subjectType}/{subjectId}` | Yes | Idempotent |
-| `DELETE` | `/favorites/{subjectType}/{subjectId}` | Yes | |
+| `GET` | `/library?type=saved\|favorite\|all` | Yes | Cursor. `type` defaults to `all`. |
+| `POST` | `/library` | Yes | Body `{trackId?, albumId?, type}`; exactly one subject; idempotent via unique constraint |
+| `DELETE` | `/library/{itemId}` | Yes | Remove one library item |
 | `GET` | `/history` | Yes | **Owner only.** Cursor + time window |
 | `DELETE` | `/history` | Yes | Clear range or all |
 | `GET` | `/history/stats` | Yes | Aggregation |
+
+Favourites and saved items share the single `/library` resource (ADR-018); the former `/favorites` endpoints are **not** created. Album favourites are expressed by posting `albumId` with `type=favorite`.
 
 `GET /history/stats` feeds `[PDF]`'s "AI Playlist Generation / weekly summary" style surfaces and `Notification` digests.
 
@@ -471,7 +485,7 @@ Per **authenticated principal** (fair use of the product) and per **IP** (pre-au
 | `OPEN-02` | Broker topology | REST room snapshot semantics on multi-instance |
 | `OPEN-04` | AI provider | §7.11 shapes; model capability limits |
 | `OPEN-06` | Personalization opt-out | Affects §7.10/§7.12 and signal handling |
-| — | Contract tooling | Generation vs. validation at Phase 6 |
+| — | Contract tooling | **RESOLVED (Phase 6):** hand-authored OpenAPI (`docs/contract/openapi.yaml`) as the source of truth, validated by test gates in both stacks — ADR-022. Not generation. |
 | — | Pagination limits | Defaults above are placeholders |
 | — | Exact rate-limit numbers | Depends on provider quotas |
 | — | Stream delivery mechanism | Proxy vs. direct URL; security and cost differ materially |
@@ -482,4 +496,4 @@ Per **authenticated principal** (fair use of the product) and per **IP** (pre-au
 
 ---
 
-**End of API strategy. No controllers, endpoints, or routes have been implemented.**
+**End of API strategy. Phase 5.1 implemented the read-only catalogue surface (`/api/v1/catalog/{tracks,artists,albums}/…`) and `GET /api/health`. Phase 6 added the versioned contract `docs/contract/openapi.yaml`, validated by tests in both stacks (ADR-022). The library, identity, and all other groups below remain unimplemented; the Phase 7 identity endpoints appear in the contract as `x-echo-implemented: false`.**

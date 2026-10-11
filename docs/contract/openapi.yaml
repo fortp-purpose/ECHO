@@ -1,0 +1,457 @@
+openapi: 3.0.3
+info:
+  title: ECHO API
+  version: 1.0.0
+  description: |
+    Versioned REST contract for ECHO — Engaging Collaborative Hub for Online Music.
+
+    This file is the single source of truth for the ECHO REST surface (`api-strategy.md`
+    P3, ADR-010/ADR-022). Both the backend and the frontend are validated against it.
+
+    Operation marker `x-echo-implemented`:
+      - `true`  — the operation is currently served by the backend and is enforced in
+                  the drift gate (`ContractValidationIntegrationTest`).
+      - `false` — the operation is planned but NOT implemented. It is documentation
+                  only; the drift gate ignores it. Phase 7 auth endpoints are listed
+                  this way.
+
+    Scope: this contract covers the product surface under `/api/**`. Spring Boot
+    actuator endpoints are infrastructure and are not validated here.
+servers:
+  - url: /
+tags:
+  - name: infrastructure
+    description: Platform health and meta endpoints.
+  - name: catalog
+    description: "Read-only catalogue surface (Level: public, no authentication)."
+  - name: identity
+    description: Planned Phase 7 identity endpoints — documentation only.
+paths:
+  /api/health:
+    get:
+      tags:
+        - infrastructure
+      operationId: health
+      summary: Live backend health probe
+      responses:
+        200:
+          description: Backend is running.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ECHO backend is running
+      x-echo-implemented: true
+
+  /api/v1/catalog/tracks/{trackId}:
+    get:
+      tags:
+        - catalog
+      operationId: getTrack
+      summary: Single track by internal ECHO id
+      parameters:
+        - name: trackId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        200:
+          description: Track view (provider-namespaced).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrackView'
+        400:
+          description: Malformed id. VALIDATION_ERROR envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        404:
+          description: Unknown id. NOT_FOUND envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        503:
+          description: No active provider. CATALOG_PROVIDER_UNAVAILABLE envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        500:
+          description: Unexpected failure. INTERNAL_ERROR envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      x-echo-implemented: true
+
+  /api/v1/catalog/artists/{artistId}:
+    get:
+      tags:
+        - catalog
+      operationId: getArtist
+      summary: Single artist by internal ECHO id
+      parameters:
+        - name: artistId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        200:
+          description: Artist view (provider-namespaced).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtistView'
+        400:
+          description: Malformed id. VALIDATION_ERROR envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        404:
+          description: Unknown id. NOT_FOUND envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        503:
+          description: No active provider. CATALOG_PROVIDER_UNAVAILABLE envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        500:
+          description: Unexpected failure. INTERNAL_ERROR envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      x-echo-implemented: true
+
+  /api/v1/catalog/albums/{albumId}:
+    get:
+      tags:
+        - catalog
+      operationId: getAlbum
+      summary: Single album by internal ECHO id
+      parameters:
+        - name: albumId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        200:
+          description: Album view (provider-namespaced).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlbumView'
+        400:
+          description: Malformed id. VALIDATION_ERROR envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        404:
+          description: Unknown id. NOT_FOUND envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        503:
+          description: No active provider. CATALOG_PROVIDER_UNAVAILABLE envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        500:
+          description: Unexpected failure. INTERNAL_ERROR envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      x-echo-implemented: true
+
+  /api/v1/catalog/albums/{albumId}/tracks:
+    get:
+      tags:
+        - catalog
+      operationId: getAlbumTracks
+      summary: Available tracks of one album
+      description: Withdrawn tracks are excluded.
+      parameters:
+        - name: albumId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        200:
+          description: List of track views (not yet paginated).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TrackView'
+        400:
+          description: Malformed id. VALIDATION_ERROR envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        404:
+          description: Unknown id. NOT_FOUND envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        503:
+          description: No active provider. CATALOG_PROVIDER_UNAVAILABLE envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        500:
+          description: Unexpected failure. INTERNAL_ERROR envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      x-echo-implemented: true
+
+  /api/v1/catalog/jamendo/search:
+    get:
+      tags:
+        - catalog
+      operationId: searchJamendo
+      summary: Search tracks via the Jamendo provider
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 10
+      responses:
+        200:
+          description: Track results.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tracks:
+                    type: array
+                    items:
+                      type: object
+        503:
+          description: Provider unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      x-echo-implemented: true
+
+  # ---------------------------------------------------------------- planned
+  # Phase 7 (Identity) — plans only. All marked x-echo-implemented: false.
+  # Contained in this contract so the surface is visible and versioned; nothing here
+  # is served. Exact bodies/tokens are settled in Phase 7 (see api-strategy §7.1).
+  /api/v1/auth/register:
+    post:
+      tags:
+        - identity
+      operationId: register
+      summary: PLANNED — create an account
+      description: Strictly rate limited; email verification flow still [OPEN].
+      responses:
+        501:
+          description: NOT_IMPLEMENTED — not built in this phase.
+      x-echo-implemented: false
+
+  /api/v1/auth/login:
+    post:
+      tags:
+        - identity
+      operationId: login
+      summary: PLANNED — obtain access token and rotating refresh token
+      responses:
+        501:
+          description: NOT_IMPLEMENTED — not built in this phase.
+      x-echo-implemented: false
+
+  /api/v1/auth/refresh:
+    post:
+      tags:
+        - identity
+      operationId: refresh
+      summary: PLANNED — rotate the refresh token
+      description: Reuse detection revokes the whole token family.
+      responses:
+        501:
+          description: NOT_IMPLEMENTED — not built in this phase.
+      x-echo-implemented: false
+
+  /api/v1/auth/logout:
+    post:
+      tags:
+        - identity
+      operationId: logout
+      summary: PLANNED — revoke the token family server-side
+      responses:
+        501:
+          description: NOT_IMPLEMENTED — not built in this phase.
+      x-echo-implemented: false
+
+  /api/v1/auth/me:
+    get:
+      tags:
+        - identity
+      operationId: me
+      summary: PLANNED — current identity and roles
+      responses:
+        501:
+          description: NOT_IMPLEMENTED — not built in this phase.
+      x-echo-implemented: false
+
+  /api/v1/auth/password/forgot:
+    post:
+      tags:
+        - identity
+      operationId: passwordForgot
+      summary: PLANNED — request a password reset
+      responses:
+        501:
+          description: NOT_IMPLEMENTED — not built in this phase.
+      x-echo-implemented: false
+
+  /api/v1/auth/password/reset:
+    post:
+      tags:
+        - identity
+      operationId: passwordReset
+      summary: PLANNED — redeem a single-use reset token
+      responses:
+        501:
+          description: NOT_IMPLEMENTED — not built in this phase.
+      x-echo-implemented: false
+
+  /api/v1/auth/verify-email:
+    post:
+      tags:
+        - identity
+      operationId: verifyEmail
+      summary: PLANNED — confirm an email address with a token
+      responses:
+        501:
+          description: NOT_IMPLEMENTED — not built in this phase.
+      x-echo-implemented: false
+
+components:
+  schemas:
+    ApiError:
+      type: object
+      description: |
+        Stable public error envelope. Serialised from echo.platform.api.ApiError.
+        Never contains a stack trace or an internal identifier. `code` is stable and
+        documented in `api-strategy.md` §4.2.
+      required:
+        - code
+        - status
+        - message
+      properties:
+        code:
+          type: string
+          description: Stable, uppercase, documented code, e.g. VALIDATION_ERROR.
+        status:
+          type: integer
+          format: int32
+          description: HTTP status number.
+        message:
+          type: string
+          description: Safe to display to a user. No internals.
+        details:
+          type: object
+          additionalProperties: true
+          description: Structured field-level issues; only for validation errors.
+        correlationId:
+          type: string
+          description: Matches the X-Correlation-Id response header.
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO-8601 UTC instant.
+    TrackView:
+      type: object
+      description: Derived from echo.catalog.application.TrackView.
+      required:
+        - id
+        - title
+        - albumId
+        - durationMs
+        - available
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        albumId:
+          type: string
+          format: uuid
+          nullable: true
+        durationMs:
+          type: integer
+          format: int32
+          nullable: true
+        available:
+          type: boolean
+    ArtistView:
+      type: object
+      description: Derived from echo.catalog.application.ArtistView.
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    AlbumView:
+      type: object
+      description: Derived from echo.catalog.application.AlbumView.
+      required:
+        - id
+        - title
+        - primaryArtistId
+        - releaseDate
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        primaryArtistId:
+          type: string
+          format: uuid
+          nullable: true
+        releaseDate:
+          type: string
+          format: date
+          nullable: true

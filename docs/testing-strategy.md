@@ -1,9 +1,9 @@
 # ECHO — Testing Strategy
 
 **Project:** ECHO — Engaging Collaborative Hub for Online Music
-**Phase:** 1 — Architecture (documentation only)
+**Phase:** 6 — API contract and validation gate
 
-> **NO TESTS ARE WRITTEN IN THIS PHASE.** No test files, no test frameworks, no test configuration. This document specifies the testing architecture and quality gates.
+> **TESTS EXIST.** This document specifies the testing architecture and quality gates. As of Phase 6: 26 frontend tests (vitest/jsdom) and 95 backend tests (JUnit + Testcontainers PostgreSQL 16) are implemented, including the REST contract gates on both sides (ADR-022). The real-time and AI-grounding suites remain unwritten.
 
 ## Tag legend
 
@@ -265,12 +265,12 @@ Each AI failure mode must produce the documented non-AI behaviour: provider unav
 
 | Contract | Enforcement |
 |---|---|
-| REST | Frontend and backend validated against one contract; **drift fails CI** |
+| REST | Frontend and backend validated against `docs/contract/openapi.yaml`; **drift fails the build** |
 | STOMP | Event and command schemas validated on both sides |
 | Music provider | **One shared contract suite every adapter must pass** (music-provider-strategy.md §10) |
 | AI port | Port conformance per adapter |
 
-Tooling `[OPEN]` — decide at Phase 6 (ADR-010). **Contract validation must block merge**, or it will not be maintained.
+**Tooling RESOLVED (Phase 6, ADR-022):** the contract is hand-authored (`docs/contract/openapi.yaml`, OpenAPI 3.0.3) and validated by tests in both stacks. Backend: `echo.contract.ContractValidationIntegrationTest` (`swagger-parser` 2.1.48, test scope) checks the contract parses cleanly, that every operation declares a boolean `x-echo-implemented`, that `operationId`s are unique, that the live `RequestMappingHandlerMapping` and the contract agree in **both** directions over `/api/**`, and that contract schema field sets equal the Java record components and the **live wire JSON** of every implemented catalogue operation. Frontend: `frontend/src/tests/contract.test.ts` (`js-yaml` 5.4.3, devDependency) checks the contract's identity, `/api` path scope, unique `operationId`s, resolvable `$ref`s, per-operation marker presence, the implemented surface, and that every path the frontend requests is implemented. Both run in the default commands (`.\mvnw.cmd test`, `npm test`) and **block the build**. Wiring these commands into CI (so the merge itself is blocked) is deferred to Phase 26, when CI exists. **Contract validation must block merge**, or it will not be maintained.
 
 ---
 
@@ -355,7 +355,7 @@ A gate may only be bypassed for a documented emergency, with explicit human appr
 | 2 | Toolchain pinned; versions recorded |
 | 3 | Frontend scaffold; component test harness works |
 | 4 | Backend scaffold; unit + context test harness works |
-| 5 | Migration tests; repository tests; uniqueness + ordering invariants |
+| 5 | Migration tests; repository tests; uniqueness + ordering invariants — **5.1 (catalogue) DONE** |
 | 6 | Contract validation in CI |
 | 7 | **Full security suite**; refresh rotation + reuse detection |
 | 8 | **Provider contract suite** (stub-based; no live provider) |
@@ -385,11 +385,11 @@ A gate may only be bypassed for a documented emergency, with explicit human appr
 
 | ID | Decision | Blocks |
 |---|---|---|
-| — | Frontend test runner + component library (must support React 17) | Phase 3 |
-| — | Frontend integration/E2E tool | Phase 3 |
-| — | Backend test framework | Phase 4 |
-| — | Contract tooling (generation vs. validation) | Phase 6 |
-| — | E2E runner and browser targets | Phase 6 |
+| — | Frontend test runner + component library (must support React 17) | **RESOLVED (Phase 3A)**: vitest 5.0.3 + @testing-library/react 12.1.5 + @testing-library/dom 10.4.2; jsdom environment |
+| — | Frontend integration/E2E tool | **RESOLVED (Phase 3A)**: Playwright 1.63.0 pinned; browser suite still deferred (not part of the minimal Phase 6 contract gate) |
+| — | Backend test framework | **RESOLVED (Phase 3A)**: JUnit 6.1.3 + Mockito 5.23.0 + Testcontainers 2.0.5, managed by the Spring Boot 4.1.1 BOM |
+| — | Contract tooling (generation vs. validation) | **RESOLVED (Phase 6, ADR-022)**: hand-authored OpenAPI + test gates; backend `swagger-parser` 2.1.48 (test scope), frontend `js-yaml` 5.4.3 (devDependency) |
+| — | E2E runner and browser targets | Phase 6 deferred — no browser suite in the minimal contract gate; revisit with client-heavy phases |
 | — | Diff-coverage threshold | Phase 24 |
 | — | Load-testing tool | Phase 24 |
 | — | Security scanning tooling | Phase 24 |
@@ -399,4 +399,4 @@ A gate may only be bypassed for a documented emergency, with explicit human appr
 
 ---
 
-**End of testing strategy. No tests have been written.**
+**End of testing strategy. Tests now exist as of Phase 6:** **26 frontend tests** (vitest/jsdom) and **95 backend tests** (JUnit + Testcontainers PostgreSQL 16). Phase 5.1 added 47 backend tests: migration (fresh schema + incremental `V1→V3`), catalogue repository (persistence, JSONB capabilities round-trip, uniqueness, foreign keys, listing order), `CatalogService` (including per-track availability filtering), the catalogue controller (including the malformed-id and unavailable envelopes), and an end-to-end HTTP contract test that exercises the full Spring context against real PostgreSQL 16 (availability/error contract over the wire, including the correlation-id header). Phase 5.2 added 28 backend tests: `library_items` migration shape (columns, type/subject CHECK constraints, unique constraints, foreign keys), library repository (type round-trip, per-(user, subject, type) uniqueness, `saved`+`favorite` coexistence, CHECK/FK enforcement, newest-first ordering, owner scoping), and `LibraryService` (owner validation, catalogue validation through the published interface, `CATALOG_PROVIDER_UNAVAILABLE` propagation, list filtering, owner-scoped removal, and the `LIKING`/`SAVING` signal mapping). **Phase 6 added the contract gates (ADR-022): 7 backend tests (`ContractValidationIntegrationTest` — contract parses cleanly; every operation declares a boolean `x-echo-implemented`; unique `operationId`s; every implemented contract operation exists on Spring; every mapped `/api/**` request is declared implemented; contract schema field sets equal the `ApiError`/`TrackView`/`ArtistView`/`AlbumView` record components; the live wire JSON of every implemented catalogue operation matches the contract schema fields) and 8 frontend tests (`contract.test.ts` — contract identity/paths; boolean marker per operation; unique `operationId`s; `/api` path scope; every local `$ref` resolves; required implemented surface; planned auth fragment stays `x-echo-implemented: false`; every frontend-requested path is implemented).** The library HTTP contract and object-level authorization suites are deferred to Phase 11. The real-time and AI-grounding suites remain unwritten and are not yet in scope.

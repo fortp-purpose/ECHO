@@ -1,7 +1,7 @@
 # ECHO — Architecture Decision Records
 
 **Project:** ECHO — Engaging Collaborative Hub for Online Music
-**Phase:** 1 — Architecture (documentation only)
+**Phase:** 6 — API contract and validation gate
 
 ## How to read these ADRs
 
@@ -36,6 +36,16 @@ An ADR with status `Proposed` still contains an `[OPEN]` item and **must not** b
 | ADR-010 | API architecture | Accepted |
 | ADR-011 | Testing architecture | Accepted |
 | ADR-012 | Deployment architecture | Accepted (vendor-neutral) — target `[OPEN]` |
+| ADR-013 | Phase 3A frontend scaffold decisions | Accepted |
+| ADR-014 | Backend startup timezone | Accepted |
+| ADR-015 | Catalogue persistence foundation (Phase 5.1) | Accepted |
+| ADR-016 | Persistence tooling: Flyway + Spring Data JPA | Accepted — resolves ADR-003 open items |
+| ADR-017 | Reaction persistence: ephemeral (Redis TTL) | Accepted — resolves `OPEN-09` |
+| ADR-018 | Library model: unified `LibraryItem` + type discriminator | Accepted — resolves `OPEN-10` |
+| ADR-019 | AI interaction log: single `AIInteraction` | Accepted — resolves `OPEN-11` |
+| ADR-020 | Library persistence foundation (Phase 5.2) | Accepted |
+| ADR-021 | Approval record: explicit human approval of `OPEN-09`/`OPEN-10`/`OPEN-11` | Accepted — confirms ADR-017/018/019 |
+| ADR-022 | API contract tooling: hand-authored OpenAPI as the single source of truth, validated in CI-gated tests | Accepted — resolves the Phase 6 "Contract tooling" open item |
 
 ---
 
@@ -132,7 +142,7 @@ ECHO's backend is **Java + Spring Boot**. `[PDF]`
 
 # ADR-003 — Database
 
-**Status:** Accepted
+**Status:** Accepted — persistence tooling resolved by ADR-016
 
 ### Context
 ECHO.pdf page 1, §2 lists Database = "PostgreSQL". §5 lists "persistence" as a Platform Service. Data needs include relational user/social data, playlists, listening history, communities, rooms, queues, votes, chat, notifications — plus vector similarity for "similar-music discovery" (§1, §5) and "Similar Music Discovery" (Diagram B).
@@ -709,23 +719,509 @@ Full design in deployment-strategy.md.
 
 ---
 
+# ADR-013 — Phase 3A frontend scaffold decisions
+
+**Status:** Accepted
+
+### Context
+ADR-001 required the choices it opened are **recorded** in Phase 3: client-side routing library, data-fetching/query-cache layer, and real-time (STOMP) client. The Phase 3A slice built the landing page, a typed API client (`src/api/client.ts`), the `HealthCheck` component wired to `GET /api/health`, and a Vite dev proxy to the Spring Boot backend. ECHO.pdf names **no** routing, state, or query/cache library. Adding a dependency without a concrete requirement is a project constraint.
+
+### Decision
+1. **No client-side routing library in the scaffold.** `[ENG]` The Phase 3A landing page has exactly one view. React Router (or an equivalent) is **not** installed; the library choice is made when a second navigable view exists. Kept `[OPEN]` until then.
+2. **Data seam: a hand-rolled typed `fetch` wrapper** (`src/api/client.ts`). `[ENG]` No query/cache or server-state library (React Query, SWR, …) is installed. Cache invalidation, deduplication, and background-refresh needs are resolved when real server-state requirements (catalogue views, rooms) materialise.
+3. **Same-origin Vite dev proxy instead of CORS.** `[ENG]` On the dev server, `/api` (port 5173) proxies to `http://localhost:8080`; the browser makes same-origin requests, so no CORS configuration exists yet. If the frontend is ever served cross-origin to the backend, an explicit allowlist is required — never `*` with credentials.
+4. **Error mapping mirrors the backend contract.** `[ENG]` `ApiErrorException` preserves the envelope (`code`, `status`, `message`, `details`, `correlationId`, `timestamp`); a transport-level `NetworkError` distinguishes "never reached the backend" from "the backend answered". Non-JSON error bodies degrade to `HTTP_ERROR`.
+5. **E2E tool: Playwright 1.63.0 (pinned, verified in Phase 2).** `[ENG]` No Playwright suite is created in Phase 3A: the Phase 3 exit gate is component harness green plus a live smoke, and the default suite must run with no live servers. The e2e suite is introduced with the contract gates (Phase 6).
+6. **No global state library.** `[ENG]` The scaffold uses local component state only. A room/global-state store choice remains `[OPEN]` for the real-time phases.
+7. **Real-time (STOMP) client library remains `[OPEN]`.** `[ENG]` Deferred to the real-time work; nothing is installed in Phase 3A.
+
+### Alternatives
+1. **React Router now** — rejected. One view; a routing dependency would be dead weight today and churn the lockfile. Selected when navigation exists.
+2. **React Query / SWR now** — rejected. No server-state invalidation need yet; the fetch seam suffices and keeps the React 17 compatibility surface minimal.
+3. **CORS allowlist on the backend now** — rejected. The dev proxy makes it unnecessary; adding allowlist config without a cross-origin consumer is speculative configuration.
+4. **Global state library (Redux / Zustand) now** — rejected. Nothing cross-component needs it today, and every candidate would need React 17 peer verification.
+
+### Reasons
+- ADR-001 required the choices to be recorded; the smallest correct solution keeps the scaffold free of speculative dependencies.
+- The no-dependency-without-requirement constraint and the React 17 peer check (ADR-001 Consequences) both argue for the minimum installed surface.
+- Same-origin requests eliminate a whole class of development misconfiguration.
+
+### Consequences
+- `src/api/client.ts` is the single REST seam today; later evolving it into a port that also hosts the STOMP client is a small refactor.
+- Routing and query/cache remain `[OPEN]` — they are visible design gaps, not silently decided gaps.
+- When a router is added later, `package.json` gains exactly one dependency and its React 17 peer range must be verified first.
+
+### Risks
+| Risk | Severity | Mitigation |
+|---|---|---|
+| Hand-rolled client lacks retry/dedupe as scale grows | Medium | Revisit with a server-state library when real needs emerge |
+| Features bypass `client.ts` with ad-hoc fetches | Medium | Code review keeps `client.ts` the only REST seam |
+| CORS misconfiguration when frontend/backend separate | Medium | Add the explicit allowlist in the change that introduces cross-origin serving |
+| `[OPEN]` choices become de-facto decisions by inertia | Low | Recorded `[OPEN]` here so the gap stays visible |
+
+---
+
+# ADR-014 — Backend startup timezone
+
+**Status:** Accepted
+
+### Context
+Live startup of the packaged backend (Phase 3A smoke test) failed with:
+`FATAL: invalid value for parameter "TimeZone": "Asia/Calcutta"`.
+The PostgreSQL JDBC driver sends the JVM default timezone in the connection startup packet; the server accepts only names present in its timezone database, and this host's timezone is not among them. The integration tests avoided the same failure by forcing UTC inside `@DynamicPropertySource`; the live JVM had no such forcing. ECHO's contract is ISO-8601 UTC timestamps (`api-strategy.md` timing conventions; `domain-model.md` "All timestamps are server-generated UTC").
+
+### Decision
+- `EchoApplication.main` calls `TimeZone.setDefault(TimeZone.getTimeZone("UTC"))` before `SpringApplication.run`. `[ENG]`
+- **Unconditional.** The application emits UTC timestamps by contract, so a host-dependent timezone would be a consistency bug even on hosts whose timezone PostgreSQL accepts.
+
+### Alternatives
+1. **Document `-Duser.timezone=UTC` in run instructions** — rejected. A remembered runtime flag is a foot-gun in every environment and is not visible in the artifact.
+2. **Set the PostgreSQL `timezone` GUC or a JDBC URL option** — rejected. The failure happens during the startup packet, before any connection GUC applies.
+3. **Configure only Jackson/driver serialisation** — rejected. Does not fix the startup packet, which is the actual failing point (Flyway/Hikari connection).
+
+### Reasons
+- The fix is in code, matches the documented UTC contract, and mirrors what the test configuration already does.
+- Host-independent: the same artifact behaves identically in every environment.
+
+### Consequences
+- The JVM default timezone is UTC regardless of host OS setting. Logs, date handling through Hikari/Flyway sessions, and every generated timestamp are consistent.
+- An operator who explicitly passes `-Duser.timezone=...` still gets UTC. Accepted: the ECHO contract requires UTC.
+
+### Risks
+| Risk | Severity | Mitigation |
+|---|---|---|
+| A future developer removes the line as "unnecessary" | Medium | Load-bearing comment + this ADR; live start on a non-UTC host fails loudly at Flyway |
+| A feature needs local-time display | Low | Convert for display in the client; never in the server contract |
+
+---
+
+# ADR-015 — Catalogue persistence foundation (Phase 5.1)
+
+**Status:** Accepted
+
+### Context
+Phase 5.1 implements the **provider registry** and the **catalogue mirror** described in `architecture.md` §8.2 and `domain-model.md` §2.4. Catalogue records must be namespaced `provider_id` + `provider_external_id` **from day one** (`AGENTS.md` §5). `MusicProvider` is conceptual until `OPEN-01` resolves, so **no live adapter** exists and no provider may reach `active` without the four-part verification gate (`music-provider-strategy.md` §5.1). A provider withdrawal must be expressible without deleting historical catalogue rows (`domain-model.md` §2.4). Three domain decisions (`OPEN-09` ephemeral reactions, `OPEN-10` LibraryItem merge, `OPEN-11` AIInteraction) concern **later** slices (library, reactions, AI) and were **not** resolved at the time of this ADR; Phase 5.1 does not depend on them. *(All three were resolved later — see ADR-017/018/019.)*
+
+### Decision
+1. **Migrations `V2__create_music_providers.sql` and `V3__create_catalogue.sql`.** `[ENG]` V2 creates `music_providers`; V3 creates `artists`, `albums`, `tracks`. Every catalogue row is uniquely keyed by `(provider_id, provider_external_id)` (`uq_artists_provider_external`, `uq_albums_provider_external`, `uq_tracks_provider_external`).
+2. **Provider lifecycle is a constrained status set.** `[ENG]` `music_providers.status` is `VARCHAR(20)` with `CHECK (status IN ('unverified','active','suspended','retired'))`, default `unverified`, plus `idx_music_providers_status`. **Retirement is a status change, never a row deletion** — this preserves catalogue history and satisfies `domain-model.md` §2.4.
+3. **Capabilities are structured, typed JSONB.** `[ENG]` `music_providers.capabilities JSONB DEFAULT '{}'`, mapped to a `ProviderCapabilities` record via `@JdbcTypeCode(SqlTypes.JSON)`. Unlike free-form JSON, a typo in a capability name is a compile error.
+4. **Per-track availability is explicit.** `[ENG]` `tracks.is_available BOOLEAN DEFAULT TRUE` represents withdrawal of an individual track without deleting it.
+5. **Unavailable is a first-class, service-level state.** `[ENG]` `CatalogService` is `@Transactional(readOnly = true)`. If **no** provider is `active`, every catalogue read fails with `CATALOG_PROVIDER_UNAVAILABLE` (**503**). If an active provider exists, an unknown id is `NOT_FOUND` (**404**); a row whose serving provider is not `active`, or is unavailable, is again `CATALOG_PROVIDER_UNAVAILABLE` (503). No authentication — catalogue reads are public.
+6. **No live adapter, no fabricated data.** `[ENG]` Zero provider adapters; test data is synthetic and labelled. `CATALOG_PROVIDER_UNAVAILABLE` is the current steady state (`AGENTS.md` §8).
+
+### Alternatives
+1. **Free-form `TEXT` / untyped JSON for capabilities** — rejected. Loses compile-time safety without a real need for arbitrary shape.
+2. **A native PostgreSQL `ENUM` for `status`** — rejected. `VARCHAR + CHECK` matches the `V1` `users` style, is forward-only migration-friendly, and avoids `ALTER TYPE` ceremony.
+3. **Delete provider rows on withdrawal** — rejected. Destroys historical catalogue identity and is barred by `AGENTS.md` §12 ("deprecate or delete an entity").
+4. **Return `404` for every read when no provider is active** — rejected. `CATALOG_PROVIDER_UNAVAILABLE` is a documented, user-visible steady state, not a generic "not found"; it must be distinguishable (`AGENTS.md` §8).
+5. **Partition `listening_history` now** — rejected for 5.1. A monthly partition key must be part of every primary/unique key in PG16; this is deferred with the library slice.
+
+### Reasons
+- Provider-namespaced identity from day one prevents a later, migration-heavy retrofit.
+- The status set and JSONB capabilities encode the provider-verification rule in the schema rather than trusting callers.
+- Modelling unavailability at the service boundary keeps `AGENTS.md` §8's steady state explicit and testable.
+- Keeping 5.1 free of `OPEN-09`/`OPEN-10`/`OPEN-11` dependencies respects the sequencing rule; none of the three is silently chosen.
+
+### Consequences
+- `CatalogService` has a hard dependency on "is any provider active"; the check is a single indexed `existsByStatus` query.
+- Adding a live provider later is an adapter + a `status` transition, not a schema change.
+- Later slices (library, reactions, AI) may still reshape `OPEN-09`/`OPEN-10`/`OPEN-11`; no Phase 5.1 schema assumes their resolution.
+- Read paths are `readOnly` and untransactional across providers/AI by construction (no such calls exist yet).
+
+### Risks
+| Risk | Severity | Mitigation |
+|---|---|---|
+| A future slice sets a provider `active` without the four-part gate | High | The gate is recorded in `music-provider-strategy.md` §5.1 and `AGENTS.md` §12; enforcement is process + review until an adapter exists |
+| `is_available` and `status` drift out of the "unavailable" definition | Medium | Both paths funnel through `CatalogService`'s availability checks; covered by tests |
+| Capabilities JSON drifts from the `ProviderCapabilities` record | Medium | `@JdbcTypeCode` mapping means a mismatch fails at persistence/serialisation, not silently |
+| Premature partitioning assumption resurfaces | Low | Recorded here: partition key must be in every PK/unique key in PG16; defer with the library slice |
+
+---
+
+# ADR-016 — Persistence tooling: Flyway + Spring Data JPA
+
+**Status:** Accepted — resolves the open items recorded in ADR-003
+
+### Context
+ADR-003 fixed PostgreSQL as the store and left two items open: the migration tool (Flyway or Liquibase) and the ORM (Spring Data JPA recommended, final choice deferred to Phase 5). The Phase 3A scaffold already introduced `V1__create_users.sql` on Flyway and a JPA `User` entity with a Spring Data repository; Phase 5.1 added `V2`/`V3` and the catalogue JPA entities/repositories. The Phase 5 exit gate requires migrations to apply from empty **and** incrementally, and the architecture requires forward-only, versioned migrations with the schema owned by migrations rather than the ORM.
+
+### Decision
+- **Flyway** is the migration tool. `[ENG]` Migrations are versioned (`V1`, `V2`, `V3`), forward-only, applied on startup, and are the only source of DDL.
+- **Spring Data JPA (Hibernate ORM)** is the persistence layer for relational modules. `[ENG]`
+- **Hibernate schema management is `validate` only** (`spring.jpa.hibernate.ddl-auto=validate`): Hibernate verifies that the entity model matches the migrated schema and never creates or alters it. `[ENG]`
+- **Open Session in View is disabled** (`spring.jpa.open-in-view=false`). `[ENG]` Lazy associations are resolved inside the service transaction; controllers return DTO views only.
+- `pgvector` remains excluded until the Phase 19 migration (ADR-004).
+
+### Alternatives
+1. **Liquibase** — rejected. Flyway was already in use since Phase 3A; switching would rewrite history for no benefit, and Flyway's versioned SQL maps directly onto the forward-only rule.
+2. **Hibernate `ddl-auto=update`/`create`** — rejected. Letting the ORM mutate the schema bypasses migration discipline and breaks the "PostgreSQL is the sole system of record, schema via migrations" rule.
+3. **Plain JDBC / jOOQ instead of JPA** — rejected for the catalogue slice. The relational mappings are simple and Spring Data removes boilerplate; explicit SQL remains available where it earns its place.
+4. **OSIV enabled** — rejected. Holding a session open for the whole request hides lazy-loading bugs and couples the web layer to the persistence context.
+
+### Reasons
+- Flyway and JPA were already the de-facto choices across Phase 3A and 5.1; recording them closes the ADR-003 open items and makes the choice explicit.
+- `validate` turns entity/schema drift into a startup failure instead of silent divergence.
+- Disabling OSIV keeps transactions in the application layer, matching the architecture's layering rule.
+
+### Consequences
+- Every schema change is a new forward migration; rollback is a compensating migration (deployment §26.5).
+- Tests that boot the full context now fail fast if an entity and the migrated schema disagree.
+- Application services that touch lazy associations must be `@Transactional` (already true for `CatalogService`).
+- Controllers must not leak entities; they return view records.
+
+### Risks
+| Risk | Severity | Mitigation |
+|---|---|---|
+| `validate` breaks the suite when an entity drifts from the schema | Low | That is the intended signal; fix the migration or the entity, never disable validation |
+| A developer re-enables OSIV for convenience | Low | Recorded here and in the architecture; review |
+| Flyway checksums block edits to an applied migration | Medium | Never edit an applied migration; add a new version (forward-only) |
+| JPA used where explicit SQL would be clearer | Low | ADR-003 already scopes JPA to relational mappings |
+
+---
+
+# ADR-017 — Reaction persistence: ephemeral (Redis TTL)
+
+**Status:** Accepted — resolves `OPEN-09`
+
+### Context
+ECHO.pdf names "reactions" as a real-time capability (page 1, §1; page 2, §5; Diagrams A/B) and lists it among the Music Streaming experiences. The `Reaction` entity is in the mandated domain model (`domain-model.md` §2.21), but its persistence was explicitly unresolved (`domain-model.md` §4.3; `realtime-strategy.md` §6.5/§14). The realtime strategy specified reactions as "**broadcast, not persisted** (pending `OPEN-09`)" with batched `room.reaction.burst` events and per-user rate limiting. `ai-strategy.md` §5 does **not** list reactions among the `[PDF]`-named AI input signals. ECHO.pdf requires the real-time *capability*, not a reaction *history*, user reaction profile, or moderation log. The decision was resolved by explicit human approval.
+
+### Decision
+1. **Reactions are ephemeral.** `[ENG]` They exist only as real-time STOMP broadcasts (`room.reaction.send` command → `room.reaction.burst` event) and in Redis with a TTL for the room-session lifetime. **No PostgreSQL table is created for `Reaction`.** No reaction migration.
+2. **Redis key pattern** `room:{roomId}:reactions:{trackId}` → a hash of `{userId: reactionType}` with a TTL bounded to the room session plus a grace period. `[ENG]`
+3. **Batched aggregation.** The real-time server aggregates reactions in memory; counts are broadcast in bursts (`room.reaction.burst`), never one event per reaction (`realtime-strategy.md` §6.5). `[ENG]`
+4. **Abuse handling is metric-based.** Per-user, per-window reaction rate is metered and rate-limited (`security-strategy.md` §11). No durable abuse log is written. `[ENG]`
+5. **No AI coupling.** Reactions are not emitted as `PreferenceSignal`; the recommendation pipeline does not consume them (`ai-strategy.md` §5). `[ENG]`
+
+### Alternatives
+1. **Persist reactions to PostgreSQL** — rejected. Creates a high-write table with no `[PDF]`-stated benefit, expands the privacy surface, and adds a moderation scope for content that has no user-visible history.
+2. **Persist only daily aggregates** — rejected. Still creates a table, pre-computes a signal the PDF does not require, and complicates erasure.
+3. **Ephemeral with opt-in history** — rejected. Adds product complexity for a capability the PDF does not define.
+
+### Reasons
+- The PDF requires the real-time capability, not durable history.
+- The realtime architecture is already designed around broadcast + batched bursts; persistence is additive cost with no benefit.
+- Privacy and moderation surfaces stay minimal: no persistent record of transient emotional feedback, consistent with presence (TTL-based, room-isolated) and the architecture's ephemeral/durable split.
+- Consistent with `domain-model.md` §4.3, which "strongly favours not persisting".
+
+### Consequences
+- No `Reaction` JPA entity, repository, or migration.
+- The reaction slice (Phase 18) implements validation + broadcast + Redis TTL only.
+- The frontend shows live aggregate counts; no "your reactions" history view.
+- `OPEN-09` is removed from `requirements.md` §9 and the `domain-model.md` §4.7 checklist.
+
+### Risks
+| Risk | Severity | Mitigation |
+|---|---|---|
+| A later requirement for reaction history appears | Low | Additive forward migration; the decision is revisitable by a new ADR, never by editing this one |
+| Redis key growth if TTL is misconfigured | Medium | TTL is mandatory and bounded to the session; a room-close sweep clears leftover keys |
+| Reaction flood | Medium | Per-user rate-limit window (`realtime-strategy.md` §14); batched broadcasts (ADR-005 keeps Redis, not a broker) |
+
+### Unresolved parameters (deferred to Phase 18, not architectural)
+Redis TTL duration · per-user rate-limit window · reaction type allowlist. These are configuration values, not model decisions.
+
+---
+
+# ADR-018 — Library model: unified `LibraryItem` + type discriminator
+
+**Status:** Accepted — resolves `OPEN-10`
+
+### Context
+ECHO.pdf names both "personal libraries" and "favorites" as distinct capabilities (page 1, §1; page 2, §5; feature register `requirements.md` §3.4 features 7–8). The domain model carried two near-identical entities: `Favorite` (subject `Track | Album`) and `LibraryItem` (Track-only), with their overlap flagged `[OPEN-10]` (`domain-model.md` §2.10/§2.11/§4.1). `ai-strategy.md` §5 lists **two distinct signals** — "liking / favouriting" and "saving (library)" — both Medium. `security-strategy.md` §4.5 gives both the same authorization rule (owner only). The human ruling required by `domain-model.md` §4.1 was: **do favourites and library items carry different recommendation ranking weight?** The ruling is **no** — both are the same "user keeps this" intent with the same weight — so the two entities are merged. Album favourites, mandated by the `Favorite` definition, are preserved.
+
+### Decision
+1. **A single `library_items` table** with a type discriminator. `[ENG]`
+   ```sql
+   CREATE TABLE library_items (
+       id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       user_id    UUID NOT NULL REFERENCES users(id),
+       track_id   UUID REFERENCES tracks(id),
+       album_id   UUID REFERENCES albums(id),
+       type       VARCHAR(20) NOT NULL CHECK (type IN ('saved','favorite')),
+       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       CONSTRAINT uq_library_items_user_track_type UNIQUE (user_id, track_id, type),
+       CONSTRAINT uq_library_items_user_album_type UNIQUE (user_id, album_id, type),
+       CONSTRAINT chk_library_items_subject CHECK (
+           (track_id IS NOT NULL AND album_id IS NULL) OR
+           (track_id IS NULL AND album_id IS NOT NULL)
+       )
+   );
+   ```
+2. **Both tracks and albums are supported** via nullable `track_id`/`album_id` with the `chk_library_items_subject` mutual-exclusion constraint. `[ENG]`
+3. **`Favorite` ceases to be a separate entity.** `[ENG]` It becomes `library_items.type = 'favorite'`.
+4. **Distinct AI signals are preserved.** `[ENG]` The domain emits `PreferenceSignal` type `LIKING` for `type = 'favorite'` and `SAVING` for `type = 'saved'`. The shared table does **not** collapse the two signal types (`ai-strategy.md` §5).
+5. **API surface merges.** `[ENG]` `GET/POST/DELETE /api/v1/library` with `?type=saved|favorite|all`; the separate `/api/v1/favorites` endpoint is not created.
+6. **Authorization is unchanged.** `[ENG]` Owner-only, enforced centrally as for every user-owned resource (`security-strategy.md` §4.5). Invisible rows return `404`.
+7. **Migration `V4__create_library.sql`** is forward-only and additive; no existing table is altered or dropped. `[ENG]`
+
+### Alternatives
+1. **Separate `favorites` + `library_items` tables** — rejected. Two tables, two repositories, two endpoints, two authorization paths, and two sources for the same signal, risking double-counting in the AI layer (`domain-model.md` §4.1).
+2. **Separate tables with an application-layer merged view** — rejected. Still two schemas; the merge is fragile and duplicates authorization.
+3. **JPA inheritance (`Favorite` extends `LibraryItem`)** — rejected. Adds ORM complexity for no benefit over a discriminator column.
+4. **Track-only library, drop album favourites** — rejected. Would silently remove a `[PDF]`-named capability (`requirements.md` feature 8).
+
+### Reasons
+- Both capabilities express the same user intent ("kept"), with the same ranking weight per the human ruling.
+- One authorization path, one uniqueness rule, one signal source; no double-counting.
+- The PDF naming of both capabilities is satisfied by the `type` filter and by two distinct `PreferenceSignal` types.
+- Forward-only-friendly: a future split to two tables is an additive compensating migration, not a destructive rewrite.
+
+### Consequences
+- `Favorite` is removed from the conceptual entity table; `LibraryItem` gains `type` and optional `album_id`.
+- `PreferenceSignal` generation is keyed off `library_items.type`, preserving `LIKING`/`SAVING`.
+- `OPEN-10` is removed from `requirements.md` §9 and the `domain-model.md` §4.7 checklist.
+- `listening_history` and `follows` remain separate future slices; this ADR covers the library only.
+
+### Risks
+| Risk | Severity | Mitigation |
+|---|---|---|
+| A future rule genuinely needs different ranking weight per type | Medium | Signal emission already distinguishes types; a compensating migration can split the table without data loss |
+| Nullable subject columns permit a malformed row | Low | `chk_library_items_subject` + two partial unique constraints enforce exactly one subject |
+| Endpoint merge breaks a client expecting `/favorites` | Low | Merge performed before API freeze (Phase 6); documented in `api-strategy.md` |
+
+### Unresolved parameters (deferred, not architectural)
+Retention window (`OPEN-05`) · personalization opt-out semantics (`OPEN-06`). Both apply to `library_items` as already recorded.
+
+---
+
+# ADR-019 — AI interaction log: single `AIInteraction`
+
+**Status:** Accepted — resolves `OPEN-11`
+
+### Context
+ECHO.pdf requires an AI Music Intelligence layer with capabilities including natural-language playlist generation and similarity/contextual recommendation (page 1, §1; page 2, §5). The domain model carried `AIRequest` and `AIResult` as two `[ENG]` entities in strict 1:1 correspondence, both flagged `[OPEN-11]` (`domain-model.md` §2.26/§2.27/§4.2). `ai-strategy.md` §2.2 fixes the **grounding gate**: an AI result referencing any identifier absent from the permitted catalogue is rejected in full, never repaired, never displayed; the rejection is recorded and metered. The human ruling required by `domain-model.md` §4.2 was: **do request and result need different retention periods?** The ruling is **no** — both are retained under one policy per `OPEN-05` — so the two entities are merged into a single interaction log. Raw prompts remain prohibited from storage (`ai-strategy.md` §13).
+
+### Decision
+1. **A single `ai_interactions` table** recording the full lifecycle. `[ENG]`
+   ```sql
+   CREATE TABLE ai_interactions (
+       id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       user_id            UUID NOT NULL REFERENCES users(id),
+       room_id            UUID REFERENCES listening_rooms(id),
+       prompt_hash        VARCHAR(64) NOT NULL,
+       prompt_token_count INTEGER NOT NULL,
+       model_id           VARCHAR(100) NOT NULL,
+       model_version      VARCHAR(50) NOT NULL,
+       status             VARCHAR(20) NOT NULL CHECK (status IN ('pending','completed','rejected','failed')),
+       grounding_status   VARCHAR(20) NOT NULL CHECK (grounding_status IN ('pending','grounded','ungrounded')),
+       resolved_count     INTEGER NOT NULL DEFAULT 0,
+       candidate_count    INTEGER NOT NULL DEFAULT 0,
+       error_code         VARCHAR(50),
+       created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       completed_at       TIMESTAMPTZ
+   );
+   ```
+2. **Prompt text is never stored.** `[ENG]` Only `prompt_hash` (SHA-256) is persisted, for deduplication and debug correlation. A hash is **not** anonymisation and is **not** a substitute for privacy controls; retention and access control remain the actual privacy mechanisms (`ai-strategy.md` §13; `domain-model.md` §5.4).
+3. **Grounding outcome is first-class.** `[ENG]` `grounding_status`, `resolved_count`, and `candidate_count` are mandatory columns so the ungrounded rate is a queryable, alertable metric (`ai-strategy.md` §2.2).
+4. **One row represents every terminal state** — `pending`, `completed`, `rejected` (ungrounded), `failed` — so no orphan request/result states exist. `[ENG]`
+5. **Room-scoped interactions** are supported by a nullable `room_id` for group natural-language requests, without a second entity. Group features must not leak an individual's signal (`agents.md` §7). `[ENG]`
+6. **Ownership and erasure.** `[ENG]` Owner-only access via `user_id`; user erasure cascades to `ai_interactions` (`security-strategy.md` §15).
+7. **Migration `V6__create_ai_interactions.sql`** (after the library slice) is forward-only and additive. `[ENG]`
+
+### Alternatives
+1. **Separate `ai_requests` + `ai_results` with an FK** — rejected. Two tables, a join for every audit query, possible orphan states, two retention policies, and a grounding write that must span two rows atomically.
+2. **Separate tables unified by a database view** — rejected. Still two physical tables and the same orphan/transaction problems.
+3. **Persist the request, keep the result ephemeral** — rejected. The grounding audit needs prompt context and resolution outcome together.
+
+### Reasons
+- Request and result are in strict 1:1 correspondence and always created together.
+- A single row is complete evidence for hallucination containment: prompt hash + model id/version + grounding status + resolved/candidate counts.
+- Privacy is preserved by storing no raw prompt and by a single retention policy; a prompt hash alone is explicitly not treated as anonymisation.
+- Simpler ownership/authorization and a cleaner erasure cascade.
+
+### Consequences
+- `AIRequest` and `AIResult` are removed from the conceptual entity table; `AIInteraction` replaces both.
+- `AiInterpretationPort` types use `AIInteraction`, not a request/result pair (`ai-strategy.md` §3.1).
+- `OPEN-11` is removed from `requirements.md` §9 and the `domain-model.md` §4.7 checklist.
+- Phase 19 `pgvector` timing is unaffected (ADR-004).
+
+### Risks
+| Risk | Severity | Mitigation |
+|---|---|---|
+| A privacy review later requires divergent retention | Medium | Single table can be split by a compensating forward migration without data loss |
+| A prompt hash is mistaken for anonymisation | Medium | Recorded here and in `domain-model.md` §5.4: the hash is for dedup/debug only; retention + authz are the privacy controls |
+| Grounding metrics drift from the alert definition | Low | Columns are mandatory and covered by the grounding test suite |
+
+### Unresolved parameters (deferred, not architectural)
+AI model provider (`OPEN-04`) · free/open provider with verified terms (`OPEN-12`) · embedding model (`OPEN-03`) · retention window (`OPEN-05`) · opt-out semantics (`OPEN-06`). This ADR fixes the entity shape only.
+
+---
+
+# ADR-020 — Library persistence foundation (Phase 5.2)
+
+**Status:** Accepted
+
+### Context
+ADR-018 resolved `OPEN-10` by merging `Favorite` into a unified `LibraryItem` with a `type` discriminator, and specified the `library_items` shape illustratively. Phase 5.2 implements that decision as a **forward-only migration plus a domain and application layer**, mirroring how ADR-015 recorded the Phase 5.1 catalogue persistence foundation. Implementation raised four questions ADR-018 did not settle: (a) how the library module references catalogue entities without crossing module boundaries at the entity level; (b) how subject and owner existence are validated; (c) whether an HTTP surface ships in this slice; and (d) how deletion and constraint naming are handled in the real DDL. The architecture fixes modular-monolith rules (`AGENTS.md` §5: cross-module access only through published application interfaces, never repositories or entities) and forbids an unauthenticated or unauthorised user-facing write surface (`AGENTS.md` §6, §9).
+
+### Decision
+1. **Migration `V4__create_library.sql` is the authoritative DDL** for `library_items`, forward-only and additive. Beyond ADR-018's illustrative snippet it adds: `ON DELETE CASCADE` on `user_id`, the named `chk_library_items_type` constraint, and indexes on `user_id`, `track_id`, `album_id`, and `(user_id, type)`. `[ENG]`
+2. **`user_id` cascades; catalogue subjects do not.** `[ENG]` Deleting a user removes their library items (privacy erasure, `security-strategy.md` §15). `track_id`/`album_id` do **not** cascade: catalogue rows are withdrawn by status change, never hard-deleted (ADR-015).
+3. **The two `UNIQUE` constraints are full, null-tolerant constraints — not partial indexes.** `[ENG]` `uq_library_items_user_track_type` and `uq_library_items_user_album_type` each dedupe one subject independently, because a `NULL` in the other subject does not participate in uniqueness. No `WHERE` clause is required. (This clarifies the "partial" wording that appears in ADR-018's risk table; ADR-018 is not edited — superseding only.)
+4. **The library module references catalogue subjects by plain `UUID` columns, not JPA associations.** `[ENG]` `LibraryItem` holds `user_id`/`track_id`/`album_id` as `UUID` fields with **no** `@ManyToOne` into `identity` or `catalog`. Referential integrity is still enforced by the database foreign keys. This keeps the library domain free of other modules' entities (`AGENTS.md` §5).
+5. **Cross-module reads go through published application interfaces.** `[ENG]` Subject validation uses the catalogue's published `CatalogService` (`getTrack`/`getAlbum`), which preserves the `CATALOG_PROVIDER_UNAVAILABLE` (503) and unknown-id (404) semantics. Owner existence uses a new published `identity` port, `UserDirectory.exists(userId)` (existence only, deleted users excluded). No library code calls another module's repository.
+6. **No HTTP surface ships in Phase 5.2.** `[ENG]` `/api/v1/library` requires authentication and object-level authorization that arrive with Phase 7 (Identity) / Phase 11. No unauthenticated controller is added (`AGENTS.md` §6, §9). The endpoint contract remains as specified in `api-strategy.md` §7.5.
+7. **Errors are modelled as application exceptions** (`LibraryOwnerNotFoundException`, `LibraryItemNotFoundException`, `LibraryDuplicateItemException`, `LibraryValidationException`). `[ENG]` Their HTTP status mapping (`404`/`409`) is deferred to the API/auth phase; the application layer stays transport-agnostic.
+8. **Integrity is owned by the database; the service pre-checks for a friendly error.** `[ENG]` The service checks for an existing `(user, subject, type)` row to raise `LibraryDuplicateItemException`; a concurrent insert still fails on the unique constraint and is never silently accepted.
+
+### Alternatives
+1. **JPA `@ManyToOne` associations to `User`/`Track`/`Album`** — rejected. Crosses module boundaries at the entity level and lets library code navigate other modules' aggregates, violating `AGENTS.md` §5.
+2. **Expose `/api/v1/library` now, unauthenticated** — rejected. Would allow unauthenticated, unauthorised writes and reads; violates the server-authoritative and object-level-authorization rules and would be a security regression.
+3. **A denormalised `subject_type` column instead of two nullable FKs** — rejected. Two nullable FKs plus `chk_library_items_subject` is simpler and keeps true database-level referential integrity per subject.
+4. **Partial unique indexes (`... WHERE track_id IS NOT NULL`)** — rejected as unnecessary. Plain `UNIQUE` constraints already dedupe each subject because `NULL`s do not collide; adding partial indexes would be redundant.
+5. **Cascade catalogue subjects too** — rejected. Would destroy user data or erase catalogue rows; the catalogue is withdrawn by status change, not deletion (ADR-015).
+
+### Reasons
+- Follows the established Phase 5.1 precedent (ADR-015) so persistence slices are recorded consistently.
+- Keeps the module boundary clean without sacrificing real referential integrity (DB FKs remain).
+- Database constraints are the authoritative backstop; application checks exist only to give good errors.
+- Shipping no HTTP surface until auth/authz exist avoids releasing an insecure user-data endpoint.
+- Cascading only on `user_id` aligns with privacy erasure while conserving catalogue history.
+
+### Consequences
+- `library_items`, the `LibraryItem` domain (with `LibraryItemType` + converter and repository), and `LibraryService` exist and are tested: 28 new backend tests (migration 5, repository 11, application 12); the full backend suite is **88 green**.
+- `identity` gains a published `UserDirectory` read port — the first cross-module read interface exposed besides the catalogue's.
+- The library **feature** remains incomplete until Phase 11 supplies the HTTP contract and central ownership enforcement.
+- `listening_history` and `follows` remain separate future slices; this ADR covers library persistence only.
+
+### Risks
+| Risk | Severity | Mitigation |
+|---|---|---|
+| The library feature is not user-reachable without an HTTP surface | Medium (expected) | Scheduled: contract in `api-strategy.md` §7.5; delivered in Phase 11 |
+| A `UUID`-only reference could point at a row removed outside the status-change discipline | Low | Database foreign keys prevent dangling references; catalogue withdrawal is a status change (ADR-015) |
+| The service pre-check races a concurrent insert | Low | The unique constraint is authoritative; the race surfaces as an integrity error, never a duplicate |
+| Entity and migrated schema drift | Low | `ddl-auto=validate` fails fast (ADR-016) |
+
+### Unresolved parameters (deferred, not architectural)
+Retention window (`OPEN-05`) · personalisation opt-out semantics (`OPEN-06`). Both apply to `library_items` as already recorded.
+
+---
+
+# ADR-021 — Approval record: explicit human approval of `OPEN-09`/`OPEN-10`/`OPEN-11`
+
+**Status:** Accepted (approval record) — confirms ADR-017/ADR-018/ADR-019
+
+### Context
+ADR-017, ADR-018, and ADR-019 recorded the decisions that resolve `OPEN-09`, `OPEN-10`, and `OPEN-11` respectively, and each was marked `Accepted`. However, an `[OPEN]` decision may only be resolved by **explicit human approval** (`requirements.md` §2/§9; `AGENTS.md` §2/§4), and no attributable approval record — approver, date, and exact scope — was captured when those ADRs were written. This ADR supplies that record. It is a **new** record: it neither edits nor supersedes ADR-017/018/019, which remain in force. Per the ADR lifecycle rule (this document's end note), history is corrected by adding a record, never by editing one.
+
+### Decision
+The explicit human approval is recorded with immediate effect on the actual date of recording (**not backdated**):
+
+| Field | Value |
+|---|---|
+| Approval recorded | **2026-10-11 12:43 +05:30** (2026-10-11 07:13 UTC) |
+| Approver | **Project owner (human operator)** |
+| Instrument | This session's written approval, recorded here |
+
+**Exact scope approved:**
+
+1. `OPEN-09` — reactions are **ephemeral** using a Redis TTL; **no `Reaction` table** is created (ADR-017). `[ENG]`
+2. `OPEN-10` — a **shared `LibraryItem` with a `type` discriminator**, preserving the distinct `SAVING` and `LIKING` AI signals (ADR-018). `[ENG]`
+3. `OPEN-11` — a **single `AIInteraction`** with a unified retention policy (ADR-019). `[ENG]`
+
+These three decisions are now **resolved**. ADR-017/ADR-018/ADR-019 are **confirmed** by this approval and are **not** superseded.
+
+### Alternatives
+1. **Edit ADR-017/018/019 to insert the approval** — rejected. Violates the ADR immutability rule (this document's end note: change only by superseding, never by editing history).
+2. **Leave the approval unrecorded** — rejected. An `[OPEN]` decision "must not be silently resolved" and requires recorded explicit human approval (`requirements.md` §1/§9; `AGENTS.md` §2/§4).
+3. **Treat `OPEN-09/10/11` as still open** — rejected. Approval has been given.
+
+### Reasons
+- Gives `OPEN-09/10/11` the attributable, dated approval the register requires, while preserving the original decision records intact.
+- Keeps `requirements.md` §9 as the decision register and this ADR log as the decision history, with a one-way reference from the register to the record.
+
+### Consequences
+- `OPEN-09`, `OPEN-10`, and `OPEN-11` are resolved; `requirements.md` §9 records the resolution and this record.
+- The Phase 5.2 library persistence foundation (`V4`, ADR-020) rests on `OPEN-10`, which is now legitimately approved.
+- **Unchanged and still open:** `OPEN-01`–`OPEN-08` and `OPEN-12`. Resolving `OPEN-09/10/11` unblocks none of them.
+- Non-architectural parameters remain deferred and are **not** fixed here: `OPEN-09` Redis TTL duration, per-user rate-limit window, and reaction-type allowlist (Phase 18, per ADR-017).
+
+### Risks
+| Risk | Severity | Mitigation |
+|---|---|---|
+| The approval is recorded after the decisions were implemented | Low | Dated to the moment of recording, not backdated; stated explicitly above |
+| The record is mistaken for the decision itself | Low | This ADR references ADR-017/018/019 as the substantive decisions; it adds only the approval |
+
+### Unresolved parameters (deferred, not architectural)
+`OPEN-09` TTL / rate-limit / allowlist (Phase 18) · `OPEN-05` retention windows · `OPEN-06` opt-out semantics. Independent blockers `OPEN-01`–`OPEN-08` and `OPEN-12` are unaffected.
+
+---
+
+# ADR-022 — API contract tooling: hand-authored OpenAPI as the single source of truth, validated in CI-gated tests
+
+**Status:** Accepted — resolves the Phase 6 "Contract tooling" `[OPEN]` item (`api-strategy.md` §10; `architecture.md` §23; `implementation-roadmap.md` Phase 6)
+
+### Context
+Phase 6 of `implementation-roadmap.md` requires a "Versioned REST contract" with "CI contract validation" so the frontend and backend "cannot diverge silently" ([ENG] sequencing; the distinct project-level `[OPEN]` items `OPEN-01`–`OPEN-08` and `OPEN-12` are untouched). Three candidate approaches were considered:
+
+1. **Runtime generation** (springdoc-openapi emitting `openapi.yaml` from annotations at runtime).
+2. **Build-time generation** (OpenAPI Maven/Gradle generator plugins producing a file from annotations).
+3. **A hand-authored contract file in the repository**, treated as the single source of truth, with both sides validated against it in the local build.
+
+A contract is only a contract if drift is *detected*; nothing in the project currently compares the running HTTP surface to a documentation artifact. Decision needed the approach, the tooling, and the failure semantics.
+
+### Decision
+**Hand-author `docs/contract/openapi.yaml` (OpenAPI 3.0.3) as the single source of truth for the ECHO REST surface, and validate it (and the code against it) in the existing local test suites.** `[ENG]`
+
+- The contract lives at `docs/contract/openapi.yaml` and is authoritative for the REST surface. Implemented operations carry `x-echo-implemented: true`; planned-but-not-built operations (the Phase 7 identity endpoints) carry `x-echo-implemented: false` so they are visible and versioned yet can never be mistaken for implemented surface.
+- Validation is **test-scoped tooling wired into `.\mvnw.cmd test` and `npm test`** — no runtime component is introduced and no CI is created (the project has no CI; exit-gate wording "CI contract validation" is reported honestly in the Phase 6 gate).
+- **Backend gate:** `echo.contract.ContractValidationIntegrationTest` (Testcontainers PostgreSQL 16, Spring Boot context, `RequestMappingHandlerMapping`, MockMvc) — seven checks: (a) the contract parses with zero OpenAPI parser messages (malformed/schema-invalid YAML fails here); (b) every operation declares a boolean `x-echo-implemented` (a missing marker cannot silently default to "planned"); (c) `operationId`s are unique and present; (d) every `x-echo-implemented: true` operation exists on the real handler mapping; (e) every mapped request under `/api/**` is declared implemented in the contract; (f) **static schema fidelity** — each `components.schemas` field set equals the Java record component names it describes (`ApiError`, `TrackView`, `ArtistView`, `AlbumView`), every `required` field is a declared field, and every property declares a type; (g) **wire schema fidelity** — the JSON actually returned over HTTP by every implemented catalogue operation (and the 404 `ApiError` envelope) carries *exactly* the fields the contract declares. Actuator endpoints are infrastructure and are excluded by the `/api/**` scope. Parsing uses `io.swagger.parser.v3:swagger-parser:2.1.48` (**test scope**).
+- **Frontend gate:** `frontend/src/tests/contract.test.ts` (vitest/jsdom) — verifies the contract is OpenAPI 3.0.3 with the ECHO identity and at least one path; that every operation declares a boolean `x-echo-implemented`; that every operation has a unique `operationId`; that every path is scoped under `/api`; that **every local `$ref` resolves** against the document; that the implemented surface the frontend depends on exists; that the planned Phase 7 auth fragment stays `x-echo-implemented: false`; and that **every path the frontend actually requests** (string literal passed to `getJson`/`getText`/`apiUrl`) resolves to an implemented contract operation. YAML parsing uses `js-yaml:5.4.3` (**devDependency**).
+- Failure semantics: a malformed contract, a dangling `$ref`, a duplicate `operationId`, a missing `x-echo-implemented` marker, a schema/code field mismatch, an undocumented handler, a documented-but-missing handler, or a frontend call to a non-implemented path **breaks the build**. This is the gate the roadmap's "cannot diverge silently" demands.
+- **Schema-level validation is delivered**, not deferred: the backend gate compares the live wire JSON of every implemented operation to the contract schemas (check g) and the declared schema field sets to the Java records (check f). The residual limit is that it compares *field sets*, not full JSON-Schema types/formats — field-presence drift and record/shape drift are caught; deep type validation is not attempted.
+- No springdoc-openapi, no OpenAPI generator, no runtime schema publication. A generated/served document would make the annotations the source of truth and invert the contract direction; runtime doc-serving is also not needed for validation.
+- **Scope boundary vs ADR-013:** ADR-013 noted that a Playwright e2e suite would be "introduced with the contract gates (Phase 6)". This phase delivers the **contract gate only** and does **not** add a browser e2e suite; that forward-looking statement is refined (not edited — ADR-013 is unchanged) so the e2e suite is revisited with the client-heavy phases. The contract gate itself satisfies the roadmap Phase 6 exit objective ("frontend and backend cannot diverge silently").
+
+### Alternatives
+1. **springdoc-openapi runtime generation (v3.1.1 supports Spring Boot 4)** — rejected. Inverts the contract direction (annotations become the truth, the artifact becomes a byproduct), adds a runtime component and Swagger UI surface, and is not needed to validate drift. Registration of a new endpoint would silently change the served document without failing anything.
+2. **OpenAPI generator plugins (build-time)** — rejected. They also derive the artifact from code/annotations (same inversion), add a generator dependency and generated-code hygiene burden, and are heavier than the actual need (validation, not codegen).
+3. **Contract-first codegen (generate Java/TS stubs from the YAML)** — rejected for now. Would lock the codebase to a generator's output style and templates; Phase 5 slices already ship hand-written controllers/views that match. Note for later: if a generator is ever adopted, switch to contract-first, never code-first.
+4. **No contract, keep `api-strategy.md` as prose** — rejected. Prose is not machine-checkable; the roadmap's start-conditions require a validation gate before client-heavy phases.
+
+### Reasons
+- Hand-authored contract preserves the documented direction: `api-strategy.md` P3 states the surface is "specified up front" and is the basis for both sides.
+- Test-scoped tooling avoids runtime dependencies (hard constraint: no paid/metered deps; avoid adding runtime bulk) and still runs in every developer's default build command.
+- The two gates are directional and asymmetric on purpose: backend asserts both directions over the live `RequestMappingHandlerMapping` (so a new controller without a contract entry fails), while the frontend asserts every path it *actually calls* must be implemented (so code cannot call unbuilt surface). Together they prevent silent divergence from either side.
+- `js-yaml` 5.4.3 and `swagger-parser` 2.1.48 were verified as current stable versions (`[ENG]`, pinned per `AGENTS.md` §9 toolchain discipline). swagger-parser runs on its own Jackson 2 stack, separate from Boot 4's Jackson 3, at test scope only.
+
+### Consequences
+- `docs/contract/openapi.yaml` exists and is the reference surface: 5 implemented endpoints (`GET /api/health`, the 4 Phase 5.1 catalogue reads) and 8 planned Phase 7 identity endpoints.
+- `backend/pom.xml` gains a test-scope `swagger-parser` dependency; `frontend/package.json` gains `js-yaml` devDependency.
+- Backend suite: **95 tests green** (88 + 7 contract). Frontend suite: **26 tests green** (18 + 8 contract). The gate tests double as negative tests: a malformed contract, a dangling `$ref`, a duplicate `operationId`, a missing marker, or a schema/wire mismatch with the running surface fails the build (all verified by deliberately breaking the contract and restoring it byte-identically).
+- `api-strategy.md` §10, `testing-strategy.md` §7/§11, `architecture.md` §23 and the ADR index are updated in the same change (docs update rule).
+- The Phase 6 exit gate "contract tooling" is resolved; the "CI contract validation" wording still needs a CI system (none exists — the gate is met locally and reported with the CI criterion marked not-verified).
+- **Unchanged and still open:** `OPEN-01`–`OPEN-08` and `OPEN-12`. This resolves no `[OPEN]` project decision that needed human approval beyond the Phase 6 tooling scope.
+
+### Risks
+| Risk | Severity | Mitigation |
+|---|---|---|
+| Contract and code drift after edits (the whole point) | High if unguarded | The two gates fail the build on drift in either direction; `x-echo-implemented` marker forces explicit intent for planned endpoints |
+| Hand-authored YAML diverges from the real error envelope or schemas | Medium | Contract schemas mirror the actual Java records (`ApiError`, `TrackView`, `ArtistView`, `AlbumView`); the backend gate enforces **static** field-set equality with the records (f) and **wire** field-set equality with the live JSON (g), so both record drift and serialization drift fail the build |
+| swagger-parser (Jackson 2) on a Boot 4 (Jackson 3) test classpath | Low | Test scope only, distinct namespaces; verified green in suite |
+| Phase 7 identity endpoints described as `x-echo-implemented: false` are mistaken for real surface | Medium | Marker is machine-checked (frontend test enforces the auth fragment stays false); the contract description states planned endpoints are documentation only |
+| Actuator endpoints appear in the real mapping and confuse the gate | Low | Comparison scoped to `/api/**`; actuator is infrastructure, documented as excluded |
+
 ## ADR cross-cutting summary
 
 | Concern | Locked by PDF | Engineering decision | Open |
 |---|---|---|---|
-| Frontend | React 17 + Vite | TypeScript, feature slicing | Router, data layer, test tooling |
-| Backend | Java + Spring Boot | Modular monolith, layered | Java/Spring versions, build tool |
-| Database | PostgreSQL | Migration-based, provider-namespaced | Migration tool, ORM |
+| Frontend | React 17 + Vite | TypeScript, feature slicing, typed fetch seam, dev proxy, Playwright pinned (ADR-013) | Router (none in scaffold), query/cache layer, global state, STOMP client |
+| Backend | Java + Spring Boot | Modular monolith, layered, Java 25 LTS + Spring Boot 4.1.1 + Maven (Phase 2), UTC startup (ADR-014) | — |
+| Database | PostgreSQL | Migration-based (Flyway), Spring Data JPA, provider-namespaced (ADR-015/016); library persistence foundation (ADR-020) | — |
 | Vectors | — (capability only) | pgvector, Phase 19 | Embedding model, dimensionality, index |
 | Cache | Redis | Cache-aside, Redis ≠ broker | TTLs |
-| Real-time | WebSocket, STOMP, Redis | Simple broker initially | `OPEN-02` broker topology |
-| AI | Capability only | Spring AI, provider abstraction, hallucination gate | `OPEN-04` provider |
+| Real-time | WebSocket, STOMP, Redis | Simple broker initially; **reactions ephemeral, Redis TTL (ADR-017)** | `OPEN-02` broker topology |
+| Library | Personal library + favorites are `[PDF]` capabilities | **Unified `LibraryItem` + `type` discriminator (ADR-018)**; album favourites supported; `LIKING`/`SAVING` preserved; **persistence via plain-UUID columns + published ports, no HTTP surface yet (ADR-020)** | `OPEN-05` retention, `OPEN-06` opt-out |
+| AI | Capability only | Spring AI, provider abstraction, hallucination gate; **single `AIInteraction` log (ADR-019)**, no raw prompts | `OPEN-04` provider, `OPEN-12` free provider |
 | Music provider | Boundary only | Port interface, zero adapters | `OPEN-01` provider |
 | Auth | Spring Security, JWT/OAuth named | JWT + rotating refresh | Lifetimes, key rotation, password policy |
-| API | — | REST/JSON, `/api/v1`, error contract | Contract tooling |
-| Testing | — | Layered + gates | Tooling |
+| API | — | REST/JSON, `/api/v1`, error contract; **hand-authored OpenAPI in `docs/contract/openapi.yaml`, validated by the backend and frontend contract gates (ADR-022)** | — (contract tooling resolved; **schema fidelity — records and wire JSON — is enforced**; deep JSON-Schema type validation remains out of scope) |
+| Testing | — | Layered + gates; **contract gates in both suites (ADR-022)** | — |
 | Deployment | — | Docker, vendor-neutral | `OPEN-07` target |
+
+> **Approval note:** the `[OPEN]` decisions resolved by ADR-017/018/019 (`OPEN-09`/`OPEN-10`/`OPEN-11`) are confirmed by the explicit human approval recorded in **ADR-021**.
 
 ---
 
-**End of ADRs. Twelve records, ADR-001 … ADR-012. An ADR may only be changed by superseding it with a new record — never by editing history. Any change to a shared component, dependency, or protocol requires a new ADR.**
+**End of ADRs. Twenty-two records, ADR-001 … ADR-022. An ADR may only be changed by superseding it with a new record — never by editing history. Any change to a shared component, dependency, or protocol requires a new ADR.**

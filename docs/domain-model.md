@@ -1,10 +1,10 @@
 # ECHO — Conceptual Domain Model
 
 **Project:** ECHO — Engaging Collaborative Hub for Online Music
-**Phase:** 1 — Architecture (documentation only)
+**Phase:** 5.2 — Library slice (conceptual model + Phase 5.1/5.2 implementation notes)
 
 > **THIS DOCUMENT CONTAINS NO DDL AND NO DATABASE SCHEMA.**
-> It describes entities conceptually: responsibility, cardinality, ownership, lifecycle, likely indexes, sensitive data, and audit concerns. The first migration is created in **Phase 5**, after the sign-off items in §4 are resolved.
+> It describes entities conceptually: responsibility, cardinality, ownership, lifecycle, likely indexes, sensitive data, and audit concerns. The catalogue entities (`MusicProvider`, `Artist`, `Album`, `Track`) were realised in the **Phase 5.1** migration and the unified `LibraryItem` in **Phase 5.2** (`V4`, ADR-018); the remaining entities are created in later Phase 5 slices, after the sign-off items in §4 are resolved.
 
 ## Tag legend
 
@@ -27,12 +27,12 @@ ECHO.pdf defines five capability areas (page 2, §5): Music Streaming, Social Mu
 |---|---|---|
 | **Identity** | `User` | Owns profile, roles, credentials, settings |
 | **Catalog** | `Track` (with `Artist`, `Album`) | Provider-namespaced cache of permitted music data |
-| **Library** | `User` (aggregate root) | Library items, favorites, listening history |
+| **Library** | `User` (aggregate root) | Library items (`saved` + `favorite`), listening history |
 | **Playlist** | `Playlist` | Ordered collection |
 | **Social** | `User` / `Community` | Follows, sharing, activity, community membership |
 | **Room** | `ListeningRoom` | The most complex aggregate: participants, queue, votes, chat |
 | **Recommendation** | `PreferenceSignal` → `Recommendation` | Signals in, ranked tracks out |
-| **Intelligence** | `AIRequest` / `AIResult` | Interaction log with grounding outcome |
+| **Intelligence** | `AIInteraction` | Interaction log with grounding outcome |
 | **Notification** | `Notification` | Delivery-agnostic record |
 
 ### 1.2 The central structural decision `[ENG]`
@@ -101,6 +101,8 @@ ECHO.pdf defines five capability areas (page 2, §5): Music Streaming, Social Mu
 | **Audit** | Every status transition, with verification evidence and date. This is the record that licensing was checked. |
 | **Tags** | **Zero providers registered in Phase 1.** `[ENG]` Audius and Jamendo are UNVERIFIED candidates with **no registration and no adapter**. |
 
+**Implemented (Phase 5.1).** `[ENG]` The `music_providers` table stores `code` (unique), `name`, `status` constrained to `{unverified, active, suspended, retired}` (default `unverified`), and a structured `capabilities` JSONB. **Withdrawal is a `status` change, never a row deletion.** Catalogue availability is derived from whether any provider is `active` (ADR-015). No provider is registered.
+
 ### 2.5 `Artist`
 
 | Aspect | Detail |
@@ -140,6 +142,8 @@ ECHO.pdf defines five capability areas (page 2, §5): Music Streaming, Social Mu
 | **Audit** | Availability-change events. |
 | **Tags** | Existence `[PDF]`. Provider-namespacing `[ENG]`. Embedding `[ENG]` deferred to Phase 19. Withdrawn-track handling `[OPEN]`. |
 
+**Implemented (Phase 5.1).** `[ENG]` `tracks` (with `artists` and `albums`) persists the mandatory `provider_id` + `provider_external_id` unique key and an explicit `is_available` flag, so a withdrawn track is flagged rather than deleted. Read access goes through `CatalogService` and returns `CATALOG_PROVIDER_UNAVAILABLE` when no provider is `active` (ADR-015).
+
 ### 2.8 `Playlist`
 
 | Aspect | Detail |
@@ -177,20 +181,21 @@ ECHO.pdf defines five capability areas (page 2, §5): Music Streaming, Social Mu
 | **Likely indexes** | Unique on (user, subject type, subject id). On subject. |
 | **Sensitive data** | **MEDIUM** — reveals taste; contributes to AI signals, so it is privacy-relevant per `[PDF]` "privacy and data-use controls". |
 | **Audit** | Not separately audited; the fact itself is the signal. |
-| **Tags** | **CONTESTED — see §4.1.** `[PDF]` requires the *capability*. Whether it deserves a **separate entity** rather than a `LibraryItem` type is `[OPEN]` (`OPEN-10`). **Not silently deleted from the model.** |
+| **Tags** | **RESOLVED (ADR-018).** `Favorite` is **not a separate entity**: it is `LibraryItem.type = 'favorite'`. The `[PDF]` capability is preserved; the separate table is not created. Album favourites remain supported via `LibraryItem.album_id`. |
 
 ### 2.11 `LibraryItem`
 
 | Aspect | Detail |
 |---|---|
-| **Responsibility** | A track in the user's personal library — saved for later. `[PDF]` ("personal libraries", §1, §5) |
-| **Cardinality** | many : 1 `User`. many : 1 `Track`. |
+| **Responsibility** | A track **or album** the user has kept — saved for later or marked as a favourite. `[PDF]` ("personal libraries" §1/§5; "favorites" §1/§5) |
+| **Cardinality** | many : 1 `User`. many : 1 subject (`Track` **or** `Album`, exactly one). |
 | **Ownership** | Owned by the `User`. |
-| **Lifecycle** | Created on save, removed on unsave. |
-| **Likely indexes** | Unique on (user, track). On added_at for recency sorting. |
+| **Lifecycle** | Created on save/favourite, removed on unsave/unfavourite. |
+| **Type** | `type ∈ {saved, favorite}` — discriminator. `[ENG]` (ADR-018) |
+| **Likely indexes** | Unique on (user, track, type) and (user, album, type); on `type`; on `created_at` for recency sorting. |
 | **Sensitive data** | **MEDIUM** — taste signal, privacy-relevant. |
 | **Audit** | None beyond user-initiated change. |
-| **Tags** | Existence `[PDF]`. **Overlaps `Favorite` (see §4.1).** If `Favorite` becomes a `LibraryItem` type, the library gains a `type` discriminator and `Favorite` as a separate entity is redundant. `[OPEN-10]`. |
+| **Tags** | Existence `[PDF]`. **RESOLVED (ADR-018):** unified table with a `type` discriminator; `Favorite` (§2.10) is `type = 'favorite'`. Exactly one of `track_id`/`album_id` is set. The `LIKING` (favourite) and `SAVING` (saved) `PreferenceSignal` types are preserved. **Implemented (Phase 5.2):** `library_items` (`V4`), with `chk_library_items_type`, `chk_library_items_subject`, and unique keys on (user, track, type) / (user, album, type). |
 
 ### 2.12 `ListeningHistory`
 
@@ -315,12 +320,12 @@ ECHO.pdf defines five capability areas (page 2, §5): Music Streaming, Social Mu
 |---|---|
 | **Responsibility** | An ephemeral emotional response to the currently playing track — heart, fire, etc. `[PDF]` "reactions". |
 | **Cardinality** | many : 1 `ListeningRoom`. many : 1 `RoomParticipant`. Optionally references the active `RoomQueueItem` or `Track`. |
-| **Ownership** | Ephemeral — `[ENG]` strongly favours **not persisting** reactions as durable rows. |
-| **Lifecycle** | Emitted → broadcast → aggregated/discarded. |
-| **Likely indexes** | **If persisted:** on (room, created_at). |
+| **Ownership** | **Ephemeral — not persisted (ADR-017).** `[ENG]` Reactions live only in Redis with a session TTL and are broadcast; no durable rows exist. |
+| **Lifecycle** | Emitted → validated → broadcast → aggregated in memory → TTL-expired. |
+| **Likely indexes** | None — no table. Redis key `room:{roomId}:reactions:{trackId}` with a TTL. |
 | **Sensitive data** | **LOW** individually; aggregate reaction counts are low-risk. |
-| **Audit** | None required. Possibly **abuse signal for moderation** — spam reactions `[OPEN]`. |
-| **Tags** | Existence `[PDF]`. **CONTESTED — see §4.3.** Persistence `[OPEN-09]`. Reaction type set `[ENG]`. |
+| **Audit** | None. Abuse is handled by per-user rate-limit metrics, not a durable log. |
+| **Tags** | Existence `[PDF]`. **RESOLVED (ADR-017): ephemeral, Redis TTL, not persisted.** Reaction type set `[ENG]`; TTL/rate-limit window deferred to Phase 18. |
 
 ### 2.22 `ChatMessage`
 
@@ -379,26 +384,39 @@ ECHO.pdf defines five capability areas (page 2, §5): Music Streaming, Social Mu
 | Aspect | Detail |
 |---|---|
 | **Responsibility** | An interaction with the AI subsystem: the user-facing request (e.g. a natural-language playlist prompt) and its context envelope. `[PDF]` "generate playlists from natural-language requests". |
-| **Cardinality** | 1 : 1 `User` (may be a room acting for several users). 1 : 1 `AIResult`. |
+| **Cardinality** | 1 : 1 `User` (may be a room acting for several users). Contributes the request phase of one `AIInteraction`. |
 | **Ownership** | Owned by the requesting user. |
 | **Lifecycle** | Submitted → interpreted → executed → resolved/validated → completed or failed. |
 | **Likely indexes** | On (user, created_at desc). On status for failure analysis. |
-| **Sensitive data** | **HIGH** — the prompt and its context may embed listening history and preferences. **Prompts must not be logged verbatim** (architecture §18.2). Retention `[OPEN-05]`. |
+| **Sensitive data** | **HIGH** — the prompt and its context may embed listening history and preferences. **Prompts must not be logged or stored verbatim** (architecture §18.2); only a prompt hash is persisted. Retention `[OPEN-05]`. |
 | **Audit** | **Must record the grounding outcome** — how many references resolved, whether the result was rejected. This is the evidence that hallucination containment works. |
-| **Tags** | Existence `[ENG]`. **Not in `[PDF]` as a concept.** Prompt text is user input → validate, bound length, sanitise. **Provider/model recorded for reproducibility. AI is never authoritative** (architecture §11.3). |
+| **Tags** | Existence `[ENG]`. **Not in `[PDF]` as a concept.** Prompt text is user input → validate, bound length, sanitise. **Provider/model recorded for reproducibility. AI is never authoritative** (architecture §11.3). **RESOLVED (ADR-019): merged into the request phase of a single `AIInteraction` (§2.28); no separate table.** |
 
 ### 2.27 `AIResult`
 
 | Aspect | Detail |
 |---|---|
 | **Responsibility** | The output of an AI interaction: candidate track ids, the resolved tracks, ranking, explanation, and validation status. `[PDF]` "identify similar music", "personalized recommendations". |
-| **Cardinality** | many : 1 `AIRequest`. 1 : many resolved `Track`. |
+| **Cardinality** | Fills the result phase of one `AIInteraction`. 1 : many resolved `Track`. |
 | **Ownership** | Owned by the request. |
 | **Lifecycle** | Produced → **resolved against the catalogue** → accepted or rejected → consumed or discarded. |
 | **Likely indexes** | On request. On grounding status for failure monitoring. |
 | **Sensitive data** | **MEDIUM** — reveals inferred preference. |
 | **Audit** | **`UNGROUNDED` results must be recorded and alerted on.** Unresolvable ids are discarded — never repaired and never rendered. |
-| **Tags** | Existence `[ENG]`. **Hard grounding rule `[ENG]`** (architecture §11.3). **Model id + version must be recorded** so results are reproducible and re-embeddable (ADR-004). |
+| **Tags** | Existence `[ENG]`. **Hard grounding rule `[ENG]`** (architecture §11.3). **Model id + version must be recorded** so results are reproducible and re-embeddable (ADR-004). **RESOLVED (ADR-019): merged into the result phase of a single `AIInteraction` (§2.28); no separate table.** |
+
+### 2.28 `AIInteraction`
+
+| Aspect | Detail |
+|---|---|
+| **Responsibility** | One row per AI interaction, capturing both the request phase (`AIRequest`, §2.26) and the result phase (`AIResult`, §2.27) in strict 1:1 correspondence. `[ENG]` |
+| **Cardinality** | many : 1 `User`. 0..1 : 1 `ListeningRoom` (group requests). |
+| **Ownership** | Owned by the requesting user; group interactions reference a `room_id`. |
+| **Lifecycle** | `pending` → `completed` \| `rejected` (ungrounded) \| `failed`. One row represents every terminal state. |
+| **Likely indexes** | On (user, created_at desc); on `room_id`; on `status`; on `grounding_status` for the ungrounded-rate metric. |
+| **Sensitive data** | **HIGH** — the row stores a prompt hash plus grounding metadata; raw prompt text is **never** stored. Retention `[OPEN-05]`. |
+| **Audit** | **Grounding outcome is first-class** (`grounding_status`, `resolved_count`, `candidate_count`) — the evidence that hallucination containment works. |
+| **Tags** | Existence `[ENG]` (ADR-019). **Not in `[PDF]` as a concept.** A prompt hash is **not** anonymisation and is not a substitute for the retention/access controls that provide privacy. |
 
 ---
 
@@ -408,12 +426,11 @@ ECHO.pdf defines five capability areas (page 2, §5): Music Streaming, Social Mu
 User ──1:1── UserProfile
   │
   ├──1:n── Playlist ──1:n── PlaylistTrack ──n:1── Track
-  ├──1:n── LibraryItem ────n:1── Track
-  ├──1:n── Favorite ───────n:1── (Track | Album)
+  ├──1:n── LibraryItem ────n:1── (Track | Album)   [type: saved | favorite]
   ├──1:n── ListeningHistory ─n:1── Track   [HIGH sensitive, AI input]
   ├──1:n── PreferenceSignal ─n:1── Track   [HIGH sensitive, AI input]
   ├──n:n── Follow ──► (User | Artist)
-  ├──1:n── AIRequest ──1:1── AIResult ──► Track (resolved only)
+  ├──1:n── AIInteraction ──► Track (resolved only)
   ├──1:n── Notification
   ├──1:n── Recommendation ──1:n── RecommendationItem ──n:1── Track
   ├──1:n── RoomParticipant ──n:1── ListeningRoom
@@ -444,7 +461,7 @@ Catalogue notes:
 | `Artist` ↔ `Album` | many : many | Credits. `[ENG]` |
 | `Follow` | directed, self-referential | Self-follow rejected. |
 | `QueueVote` | many : 1 to item, 1 : 1 per participant | Uniqueness is a **correctness invariant**. |
-| `Reaction` | many : 1, ephemeral | Persistence `[OPEN-09]`. |
+| `Reaction` | many : 1, ephemeral | **Resolved (ADR-017): not persisted — Redis TTL.** |
 | `Activity` → subject | polymorphic | Subject deletion must not break the stream. |
 
 ---
@@ -453,35 +470,29 @@ Catalogue notes:
 
 **This section is mandatory.** Adding entities speculatively is how domain models become unmaintainable. Each candidate below is **retained in the model pending sign-off** — none has been silently deleted.
 
-### 4.1 `Favorite` as a separate entity — `[OPEN-10]`
+### 4.1 `Favorite` as a separate entity — RESOLVED
 
-**Recommendation:** `Favorite` should most likely become a **type discriminator on `LibraryItem`**, not a separate entity.
+**Decision (ADR-018):** `Favorite` becomes a **type discriminator on `LibraryItem`**, not a separate entity. A single `library_items` table holds both with `type ∈ {saved, favorite}`; tracks and albums are both supported via nullable `track_id`/`album_id` with a mutual-exclusion check constraint.
 
-**Rationale:** both express "a user has marked a track as kept". Modelling them separately creates two near-identical tables, two sets of endpoints, two authorization paths, and — critically for the AI layer — **two overlapping sources for the same preference signal**, risking double-counting the `[PDF]`-named "saving" signal.
+**Rationale:** both express "a user has marked a track or album as kept". The separate-table design created two near-identical tables, two sets of endpoints, two authorization paths, and two overlapping sources for the same preference signal. The human ruling confirmed favourites and saved items carry the **same ranking weight**, so there is no reason to split them. The two `[PDF]`-named capabilities remain distinct in the API (`?type=`) and as signal types: `LIKING` (favourite) vs `SAVING` (saved).
 
-**Counter-argument for keeping it:** ECHO.pdf names **both** "favorites" and "personal libraries" as distinct capabilities (page 1, §1; page 2, §5). They may be intended as genuinely different things — favourites as an explicit high-signal endorsement, library as a broad save-for-later. If that distinction matters for ranking, two entities is correct.
+**Trade-off accepted:** if a future rule genuinely needs different ranking weight per type, the signal layer already distinguishes them and a compensating migration can split the table without data loss.
 
-**Decision needed:** do favourites and library items carry different ranking weight? If yes → keep separate. If no → merge. **Retained pending Phase 5 sign-off.**
+### 4.2 `AIRequest` and `AIResult` as separate entities — RESOLVED
 
-### 4.2 `AIRequest` and `AIResult` as separate entities — `[OPEN-11]`
+**Decision (ADR-019):** a **single `AIInteraction` entity** holds both the request and result phases.
 
-**Recommendation:** a **single `AIInteraction` entity** with a request phase and a result phase is likely sufficient.
+**Rationale:** they are in strict 1:1 correspondence and always created together. Two entities meant a join, two lifecycles, and a possible inconsistent state (a request with no result, or a result with no request). The human ruling confirmed request and result share a **single retention policy**, so there is no privacy reason to split them. Raw prompt text is never stored — only a prompt hash — which is explicitly **not** treated as anonymisation.
 
-**Rationale:** they are in strict 1:1 correspondence and always created together. Two entities mean a join, two lifecycles, and a possible inconsistent state where a request has no result and no result has a request.
+**Trade-off accepted:** if a privacy review later requires divergent retention, the table can be split by a compensating forward migration.
 
-**Counter-argument for keeping them separate:** they have genuinely different lifecycles and retention characteristics — a request may be retained for debugging while a result (containing inferred taste) is discarded, or vice versa. Privacy-driven retention divergence is a real possibility given `[PDF]`'s privacy clause.
+### 4.3 `Reaction` as a persisted table — RESOLVED
 
-**Decision needed:** do request and result retention differ? **Retained pending Phase 5 sign-off.**
+**Decision (ADR-017):** reactions are **ephemeral** — Redis with a session TTL plus real-time broadcast, **not** persisted to PostgreSQL.
 
-### 4.3 `Reaction` as a persisted table — `[OPEN-09]`
+**Rationale:** reactions have no durable value in ECHO's `[PDF]` capability set; they are transient feedback during a session. Persisting them would create a high-write table serving no requirement, expand the privacy surface, and add moderation scope for content with no user-visible history. Reaction history is not a `[PDF]`-named AI signal (`ai-strategy.md` §5).
 
-**Recommendation:** reactions should be **ephemeral** — Redis with a short TTL, aggregated for display, not persisted to PostgreSQL.
-
-**Rationale:** reactions have no durable value in ECHO's `[PDF]` capability set. They are transient emotional feedback during a session. Persisting them creates a high-write table serving no requirement, expands the privacy surface, and adds moderation scope for content with no user-visible history.
-
-**Counter-argument for persisting:** (a) moderation may require a record of abuse; (b) reaction aggregates could become an engagement signal for the recommendation system; (c) showing a user "you reacted to this" later needs history.
-
-**Decision needed:** does any `[PDF]` capability need reaction history? On current reading of ECHO.pdf, no. **Retained pending Phase 5 sign-off.**
+**Trade-off accepted:** if a later requirement for reaction history appears, it is an additive forward migration and a new ADR — never an edit of ADR-017.
 
 ### 4.4 `RecommendationItem`
 
@@ -504,9 +515,9 @@ Join entities between `User`, `Role`, and `ListeningRoom`. Structurally implied 
 
 ### 4.7 Sign-off checklist for Phase 5
 
-- [ ] `OPEN-10` — `Favorite` merged into `LibraryItem`, or kept distinct? Requires a ruling on differing ranking weight.
-- [ ] `OPEN-11` — `AIRequest`/`AIResult` merged into `AIInteraction`, or kept separate? Requires a ruling on retention divergence.
-- [ ] `OPEN-09` — `Reaction` ephemeral or persisted?
+- [x] `OPEN-10` — **RESOLVED (ADR-018):** `Favorite` merged into `LibraryItem` as `type = 'favorite'`; same ranking weight confirmed. Approval recorded 2026-10-11 (ADR-021).
+- [x] `OPEN-11` — **RESOLVED (ADR-019):** `AIRequest`/`AIResult` merged into a single `AIInteraction`; unified retention confirmed. Approval recorded 2026-10-11 (ADR-021).
+- [x] `OPEN-09` — **RESOLVED (ADR-017):** `Reaction` is ephemeral (Redis TTL); not persisted. Approval recorded 2026-10-11 (ADR-021).
 - [ ] `RecommendationItem` — entity, ordered array, or cache-only?
 - [ ] Track → Album cardinality: single-album or multi-release?
 - [ ] Community governance and role model `[OPEN]`.
@@ -527,10 +538,10 @@ Join entities between `User`, `Role`, and `ListeningRoom`. Structurally implied 
 | `PreferenceSignal` | Aggregated taste profile | Densest behavioural profile | §1 + privacy clause |
 | `ChatMessage` | Free-text user content | Unmoderated user content | §1 "real-time chat" |
 | `ListeningRoom` | Participant set + simultaneous activity | Reveals who listens together | §1 shared listening |
-| `AIRequest` | Prompt + context | May embed listening history | §1 AI layer |
+| `AIInteraction` | Prompt hash + context + grounding metadata | Raw prompt may embed listening history (never stored) | §1 AI layer |
 
 ### 5.2 MEDIUM sensitivity
-`UserProfile` (bio, external links) · `Favorite` and `LibraryItem` (taste signals) · `Playlist` (private taste) · `Activity` (public behaviour) · `Follow` (social graph) · `RoomQueueItem` (contributed taste) · `Recommendation` and `AIResult` (inferred taste) · `Notification` (may reveal private activity) · `RoomParticipant` (presence).
+`UserProfile` (bio, external links) · `LibraryItem` (taste signals — both `saved` and `favorite`) · `Playlist` (private taste) · `Activity` (public behaviour) · `Follow` (social graph) · `RoomQueueItem` (contributed taste) · `Recommendation` (inferred taste) · `Notification` (may reveal private activity) · `RoomParticipant` (presence).
 
 ### 5.3 LOW sensitivity
 `Track` / `Artist` / `Album` / `MusicProvider` metadata · `PlaylistTrack` · `ChatMessage` retention metadata.
@@ -539,7 +550,7 @@ Join entities between `User`, `Role`, and `ListeningRoom`. Structurally implied 
 
 1. **Never log:** access/refresh tokens, password hashes, provider credentials, full AI prompts containing listening history, full chat message bodies in application logs.
 2. **AI payloads are minimised** — do not send raw user identifiers or full history when a smaller sufficient signal set exists.
-3. **Erasure must cascade** to `PreferenceSignal`, `AIResult`, cached recommendation artefacts, and embeddings derived from a deleted user's history. Deleting only source rows is insufficient — `[PDF]`'s privacy clause demands more than a row delete.
+3. **Erasure must cascade** to `PreferenceSignal`, `AIInteraction`, cached recommendation artefacts, and embeddings derived from a deleted user's history. Deleting only source rows is insufficient — `[PDF]`'s privacy clause demands more than a row delete.
 4. **Embeddings derived from user behaviour are personal data**, not anonymous vectors. This is easy to miss once pgvector lands in Phase 19.
 5. **Rate-limit and presence keys are ephemeral** and must not embed PII in key names, since key names may appear in operational tooling.
 
@@ -558,7 +569,7 @@ Join entities between `User`, `Role`, and `ListeningRoom`. Structurally implied 
 | `ChatMessage` | Moderation actions (deletion, user sanction) | UGC compliance |
 | `Community` | Moderation, ownership transfer | Governance disputes |
 | `Notification` | Delivery failures | Support diagnostics |
-| `AIResult` | Grounding outcome (`ACCEPTED` / `UNGROUNDED`), counts resolved | **Evidence hallucination containment functions** |
+| `AIInteraction` | Grounding outcome (`ACCEPTED` / `UNGROUNDED`), counts resolved | **Evidence hallucination containment functions** |
 | `ListeningHistory` | Aggregate counts only | Raw rows are user data, not audit data |
 
 ### 6.2 Audit storage principle `[ENG]`
@@ -580,7 +591,7 @@ A provider may remove a track that sits in a user's playlist, library, history, 
 ### 7.3 Ephemeral vs. durable state `[ENG]`
 | Durable (PostgreSQL) | Ephemeral (Redis, TTL) |
 |---|---|
-| Room membership, queue, votes, chat, reactions-if-persisted | Presence, playback position, sync epoch, connected-socket set |
+| Room membership, queue, votes, chat | Presence, playback position, sync epoch, connected-socket set, **reactions (ADR-017)** |
 | All user data | Catalogue cache, search cache, rate-limit counters |
 | Notification records | AI result cache, recommendation cache |
 | AI interaction audit | Token revocation state |
@@ -595,7 +606,7 @@ A provider may remove a track that sits in a user's playlist, library, history, 
 
 ### 7.5 Uniqueness invariants `[ENG]`
 1. One `QueueVote` per (queue item, participant).
-2. One `LibraryItem` / `Favorite` per (user, subject).
+2. One `LibraryItem` per (user, subject, type) — where subject is exactly one of `track_id`/`album_id`; a track may be both `saved` and `favorite`.
 3. One `Follow` per (follower, target).
 4. One `RoomParticipant` per (room, user).
 5. One `CommunityMember` per (community, user).
@@ -622,8 +633,8 @@ All timestamps are server-generated UTC. Client clocks are never trusted for ord
 | 7 | `Track` | Yes | `[PDF]` | — |
 | 8 | `Playlist` | Yes | `[PDF]` | — |
 | 9 | `PlaylistTrack` | Yes | `[ENG]` | — |
-| 10 | `Favorite` | Yes | `[PDF]` | **Yes — `OPEN-10`** |
-| 11 | `LibraryItem` | Yes | `[PDF]` | Overlaps `Favorite` |
+| 10 | `Favorite` | Yes | `[PDF]` | **Resolved — `LibraryItem.type='favorite'` (ADR-018)** |
+| 11 | `LibraryItem` | Yes | `[PDF]` | Resolved — unified with `type` discriminator (ADR-018) |
 | 12 | `ListeningHistory` | Yes | `[PDF]` | Retention `[OPEN-05]` |
 | 13 | `Follow` | Yes | `[PDF]` | Polymorphic `[ENG]` |
 | 14 | `Community` | Yes | `[PDF]` | Governance `[OPEN]` |
@@ -633,16 +644,16 @@ All timestamps are server-generated UTC. Client clocks are never trusted for ord
 | 18 | `RoomParticipant` | Yes | `[PDF]` | — |
 | 19 | `RoomQueueItem` | Yes | `[PDF]` | — |
 | 20 | `QueueVote` | Yes | `[PDF]` | Type set `[ENG]` |
-| 21 | `Reaction` | Yes | `[PDF]` | **Yes — `OPEN-09`** |
+| 21 | `Reaction` | Yes | `[PDF]` | **Resolved — ephemeral, not persisted (ADR-017)** |
 | 22 | `ChatMessage` | Yes | `[PDF]` | Retention `[OPEN-05]` |
 | 23 | `Notification` | Yes | `[PDF]` | Channels `[OPEN]` |
 | 24 | `Recommendation` | Yes | `[PDF]` | Persistence `[OPEN]` |
 | 25 | `PreferenceSignal` | Yes | `[PDF]` | Storage `[ENG]`, opt-out `[OPEN-06]` |
-| 26 | `AIRequest` | Yes | `[ENG]` | **Yes — `OPEN-11`** |
-| 27 | `AIResult` | Yes | `[ENG]` | **Yes — `OPEN-11`** |
+| 26 | `AIRequest` | Yes | `[ENG]` | **Resolved — `AIInteraction` request phase (ADR-019)** |
+| 27 | `AIResult` | Yes | `[ENG]` | **Resolved — `AIInteraction` result phase (ADR-019)** |
 
-**All 27 entities from the mandated list are documented, and no entity beyond it has been introduced. 4 remain contested pending Phase 5 sign-off (`OPEN-09`, `OPEN-10`, `OPEN-11`, and the `Recommendation`-item-storage question).**
+**All 27 entities from the mandated list are documented, and no entity beyond it has been introduced — the new `AIInteraction` (§2.28) is the merge of entities 26–27, not an addition. `OPEN-09`/`OPEN-10`/`OPEN-11` are resolved (ADR-017/018/019; approval recorded 2026-10-11, ADR-021). One modelling question remains open (`Recommendation` item storage).**
 
 ---
 
-**End of domain model. No DDL, no schema, and no migration has been created.**
+**End of domain model. This document is conceptual and contains no DDL. As of Phase 5.2 the catalogue entities exist as schema (`music_providers` V2; `artists`, `albums`, `tracks` V3, ADR-015) and the unified `LibraryItem` exists as schema (`library_items` V4, ADR-018); the remaining entities have no schema yet.**

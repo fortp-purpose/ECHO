@@ -1,5 +1,7 @@
 
 import React from "react";
+import HealthCheck from "./components/HealthCheck";
+import PlayerSection from "./features/player/PlayerSection";
 
 const App: React.FC = () => {
   return (
@@ -24,6 +26,20 @@ const App: React.FC = () => {
           Find your rhythm, discover new sounds, and make every
           moment yours.
         </p>
+      </section>
+
+      <PlayerSection />
+
+      <section className="status-section" aria-labelledby="status-title">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">PLATFORM STATUS</p>
+            <h2 id="status-title">Connected to ECHO.</h2>
+          </div>
+          <span className="featured-badge">LIVE CHECK</span>
+        </div>
+
+        <HealthCheck />
       </section>
 
       <section className="featured-section" aria-labelledby="featured-title">

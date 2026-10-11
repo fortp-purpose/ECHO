@@ -298,7 +298,7 @@ Chat carries a **monotonic `seq` per room** so a client can detect gaps and requ
 |---|---|
 | `room.reaction.burst` | Aggregated reactions over a short window |
 
-Reactions are **broadcast, not persisted** (pending `OPEN-09`). Batching avoids one event per reaction.
+Reactions are **broadcast, not persisted** (ADR-017 resolves `OPEN-09`: reactions are ephemeral in Redis with a session TTL). Batching avoids one event per reaction.
 
 ### 6.6 Presence
 | Event | Trigger |
@@ -499,7 +499,7 @@ When a threshold is crossed the server acts and broadcasts `room.vote.thresholdR
 | Types | Fixed allowlist | `[ENG]` |
 | Abuse signal | Tracked as a metric | `[ENG]` |
 
-Persistence remains **`OPEN-09`** — if reactions are persisted they become a high-write table and a moderation surface for no `[PDF]`-stated benefit (domain-model §4.3).
+Persistence is **decided (ADR-017): reactions are ephemeral** — Redis with a session TTL, never a PostgreSQL table. Persisting them would create a high-write table and a moderation surface for no `[PDF]`-stated benefit (domain-model §4.3). The TTL duration, rate-limit window, and reaction type allowlist remain configuration values to be fixed in Phase 18.
 
 ---
 
@@ -689,7 +689,7 @@ Detail in `testing-strategy.md`. `[ENG]`
 | — | Playback progress tick interval and drift tolerance | §11 |
 | — | Vote types and thresholds | §13 |
 | — | Vote anonymity | §13 |
-| `OPEN-09` | Reaction persistence | §14 |
+| — | Reaction persistence — **resolved: ephemeral (ADR-017)** | §14 |
 | `OPEN-05` | Chat and room retention | §12 |
 | `OPEN-08` | Chat moderation capabilities | §12 |
 | — | Max participants per room | §4, §20 |

@@ -1,9 +1,9 @@
 # ECHO — System Architecture
 
 **Project:** ECHO — Engaging Collaborative Hub for Online Music
-**Phase:** 1 — Architecture (documentation only)
+**Phase:** 6 — API contract and validation gate
 **Source of truth:** `ECHO.pdf`
-**Status:** Architecture documented. **No code, no schema, no infrastructure created.**
+**Status:** Architecture documented. **Code and schema now exist:** frontend + backend scaffolding (Phase 3A), the catalogue persistence foundation (Phase 5.1), the library persistence slice (Phase 5.2), and a validated OpenAPI contract (Phase 6, ADR-022). No music-provider adapter, no AI integration, and no containers/CI exist.
 
 ## Tag legend
 
@@ -222,16 +222,17 @@ frontend/
 ### 6.2 State strategy `[ENG]`
 | State class | Mechanism | Rationale |
 |---|---|---|
-| Server state | Query/cache library (choice `[OPEN]` at Phase 3) | Cache invalidation, dedupe, background refresh |
+| Server state | Typed `fetch` seam (`src/api/client.ts`); query/cache library still `[OPEN]` (ADR-013) | Cache invalidation, dedupe, background refresh deferred until real server-state needs exist |
 | URL state | Router params/query | Shareable, back-button-correct discovery/search views |
 | Session/auth state | In-memory store | Avoids token persistence in `localStorage` |
 | Real-time room state | Room store fed by STOMP client | Presence, queue, votes, chat, playback position |
 | Ephemeral UI state | Local component state | Avoids a global store for local concerns |
 
-**No global state library is mandated.** `[OPEN]` Choose in Phase 3; prefer the smallest tool that satisfies the real-time and server-state needs.
+**No global state library is mandated.** `[OPEN]` Deferred past Phase 3A: the scaffold uses local component state only; the room/global-store choice is recorded in ADR-013 and decided alongside the real-time phases.
 
 ### 6.3 Real-time client `[ENG]`
 - One STOMP-over-WebSocket client instance per authenticated session.
+- Client library selection remains `[OPEN]` — nothing is installed in Phase 3A (ADR-013).
 - Reconnection with exponential backoff + jitter.
 - Resync-from-server on reconnect (never trust local room state after a gap).
 - Subscriptions are room-scoped and authorized server-side (realtime-strategy.md).
@@ -292,7 +293,7 @@ Catalogue entities are provider-namespaced from day one:
 ```
 provider_id  +  provider_external_id   →   internal track identity
 ```
-This is required because ADR-008 plans multiple providers and the same logical work may appear in more than one. This decision cannot be deferred — retrofitting it is expensive. It is a Phase 5 sign-off item.
+This is required because ADR-008 plans multiple providers and the same logical work may appear in more than one. This decision cannot be deferred — retrofitting it is expensive. It was implemented in **Phase 5.1** (`(provider_id, provider_external_id)` unique keys on `artists`/`albums`/`tracks`; ADR-015).
 
 ### 8.3 Ordering-sensitive data `[ENG]`
 Playlist order, room queue position, and chat sequence require **deterministic ordering**. Chat additionally requires monotonic sequence numbers for client gap detection and deduplication (realtime-strategy.md). Gaps in dense integer positions are acceptable only if a reorder operation repairs them atomically.
@@ -303,7 +304,7 @@ Playlist order, room queue position, and chat sequence require **deterministic o
 - **The `pgvector` extension is created in the Phase 19 migration only.** `[ENG]` Phase 1 creates no schema at all.
 
 ### 8.5 No schema in Phase 1
-This document and `domain-model.md` describe entities **conceptually only**. No DDL, no tables, no migrations exist. Phase 5 is where they are created, after the domain-model sign-off that includes the "entities that should NOT exist" decisions.
+This document and `domain-model.md` describe entities **conceptually**. Phase 1 created no schema, no tables, and no migrations. As of **Phase 5.1** the catalogue tables (`music_providers` V2; `artists`, `albums`, `tracks` V3) exist (ADR-015) and as of **Phase 5.2** the unified library table (`library_items` V4) exists (ADR-018); the remaining entities are created in later Phase 5 slices, after the domain-model sign-off that includes the "entities that should NOT exist" decisions.
 
 ---
 
@@ -531,7 +532,7 @@ Full specification in `api-strategy.md`.
 `/api/v1` path versioning · resource-oriented URLs · consistent error envelope with stable machine-readable codes · cursor pagination for large mutable collections · explicit sorting whitelist (never raw SQL ordering) · idempotency keys on retryable mutations · rate limits per principal and per IP.
 
 ### 16.3 Contract ownership `[ENG]`
-The API contract is the source of truth for both sides, validated in CI. Frontend and backend may not diverge silently. Contract tooling `[OPEN]` at Phase 6.
+The API contract (`docs/contract/openapi.yaml`, OpenAPI 3.0.3) is the source of truth for both sides. Frontend and backend may not diverge silently: test gates in both stacks validate the code against the contract and fail the build on drift (ADR-022). The tooling question is resolved — hand-authored contract plus test-scope validators (`swagger-parser` backend, `js-yaml` frontend); wiring the same commands into a CI pipeline is deferred to Phase 26.
 
 ### 16.4 Error code for provider unavailability `[ENG]`
 `CATALOG_PROVIDER_UNAVAILABLE` appears in the standard error envelope, so clients can render a precise state instead of a generic failure.
@@ -541,13 +542,15 @@ The API contract is the source of truth for both sides, validated in CI. Fronten
 ## 17. Error handling
 
 ### 17.1 Error contract `[ENG]`
-Single consistent envelope across all failures:
+A single **flat** envelope (the error object *is* the body; serialised from `echo.platform.api.ApiError`) across all failures:
 - machine-readable `code` (stable, documented, never reused for a different meaning),
 - HTTP status,
 - human-readable `message` (safe to display),
-- optional structured `details`,
-- correlation/trace id,
+- structured `details` object (field-level issues for validation errors; empty otherwise),
+- correlation id (mirrors the `X-Correlation-Id` header) and an ISO-8601 UTC timestamp,
 - never a stack trace, SQL fragment, or internal identifier.
+
+The machine-readable schema is the `ApiError` component in `docs/contract/openapi.yaml` (ADR-022).
 
 ### 17.2 Layered handling `[ENG]`
 | Layer | Responsibility |
@@ -558,7 +561,7 @@ Single consistent envelope across all failures:
 | Global handler | Catch-all; never leak internals; always returns the standard envelope |
 
 ### 17.3 Notable error codes `[ENG]`
-`CATALOG_PROVIDER_UNAVAILABLE` · `UNAUTHENTICATED` · `FORBIDDEN` · `NOT_FOUND` · `VALIDATION_FAILED` · `RATE_LIMITED` · `IDEMPOTENCY_CONFLICT` · `AI_UNAVAILABLE` · `AI_RESULT_UNGROUNDED` · `ROOM_NOT_ACTIVE` · `NOT_ROOM_MEMBER` · `PROVIDER_QUOTA_EXCEEDED`.
+`CATALOG_PROVIDER_UNAVAILABLE` · `UNAUTHENTICATED` · `FORBIDDEN` · `NOT_FOUND` · `VALIDATION_ERROR` · `RATE_LIMITED` · `IDEMPOTENCY_CONFLICT` · `AI_UNAVAILABLE` · `AI_RESULT_UNGROUNDED` · `ROOM_NOT_ACTIVE` · `NOT_ROOM_MEMBER` · `PROVIDER_QUOTA_EXCEEDED`.
 
 `AI_RESULT_UNGROUNDED` is deliberately explicit: when AI returns unresolvable references the failure is recorded and surfaced, not silently swallowed.
 
@@ -787,7 +790,7 @@ Node version: Node 24 LTS "Krypton". `[ENG]` Active LTS; engines `^20.19.0 || >=
 
 Test tooling: Vitest 5.0.3, @vitejs/plugin-react 6.1.1, @testing-library/react 12.1.5, @testing-library/dom 10.4.2, jsdom 30.1.1, Playwright 1.63.0. `[ENG]` confirmed via registry.npmjs.org and GitHub; all satisfy Node 24 engine requirements and React 17.0.2 peer constraints. Vite 8.3.4 and @vitejs/plugin-react 6.1.2 are UNVERIFIED and rejected.
 
-All versions recorded in AGENTS.md §13. No `pom.xml`, `build.gradle`, or `package.json` was created in Phase 2. Scaffolding phases (Phase 3–4) will generate these files with the pinned versions.
+All versions recorded in AGENTS.md §13. No `pom.xml`, `build.gradle`, or `package.json` was created in Phase 2; **Phase 3A generated these files with the pinned versions** (`backend/pom.xml`, `frontend/package.json`), and the lockfile is committed.
 
 ---
 
@@ -895,9 +898,10 @@ Horizontal on the stateless backend tier; managed scaling for database and cache
 | Topic | Document |
 |---|---|
 | Requirement traceability, 35-feature map, constraints | `requirements.md` |
-| ADR-001…ADR-012 | `architecture-decisions.md` |
+| ADR-001…ADR-022 | `architecture-decisions.md` |
 | Entities, cardinality, ownership, lifecycle | `domain-model.md` |
 | REST conventions, errors, pagination, rate limits | `api-strategy.md` |
+| Machine-readable REST contract (OpenAPI) | `contract/openapi.yaml` |
 | WebSocket/STOMP, rooms, presence, sync, reconnect | `realtime-strategy.md` |
 | AI pipeline, embeddings, grounding, cost, privacy | `ai-strategy.md` |
 | `MusicProvider` port, verification gate, candidates | `music-provider-strategy.md` |
@@ -907,4 +911,4 @@ Horizontal on the stateless backend tier; managed scaling for database and cache
 | Phase 0–28 sequencing and gates | `implementation-roadmap.md` |
 | Durable rules for future sessions | `AGENTS.md` |
 
-**End of architecture document. Phase 1 — no code, schema, or infrastructure has been created.**
+**End of architecture document. Phases 0–3A, Phase 5.1, the Phase 5.2 library persistence slice, and Phase 6 (API contract + validation gate) are complete: the catalogue schema and library schema exist, a read-only catalogue API is live, and a versioned OpenAPI contract is validated by tests in both stacks (ADR-022). No music-provider adapter and no AI integration exist.**

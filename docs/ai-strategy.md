@@ -114,7 +114,7 @@ Containment must therefore be **architectural**: the model never has the ability
 | Recommendations | — | **AI's own output** |
 | Explanations | — | **AI's own output** |
 
-**AI proposes. Deterministic code validates, resolves, and persists.** `AIRequest`/`AIResult` are interaction logs; the domain entities they reference are the truth (domain-model §2.26–2.27).
+**AI proposes. Deterministic code validates, resolves, and persists.** `AIInteraction` is an interaction log (ADR-019); the domain entities it references are the truth (domain-model §2.28).
 
 ---
 
@@ -199,8 +199,8 @@ Rules:
 |---|---|---|
 | Listening history | Playback events | **HIGH** |
 | Skipping | Playback events | Medium — a strong negative signal |
-| Liking / favouriting | User action | Medium |
-| Saving (library) | User action | Medium |
+| Liking / favouriting | User action (`LibraryItem.type='favorite'`) | Medium |
+| Saving (library) | User action (`LibraryItem.type='saved'`) | Medium |
 | Playlist activity | Playlist mutations | Medium |
 | Searches | Search queries | Medium — **may be sensitive** |
 | Followed artists | Follow actions | Low |

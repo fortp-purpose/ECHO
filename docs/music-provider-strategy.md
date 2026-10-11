@@ -5,7 +5,7 @@
 
 > ## STATUS: NO MUSIC PROVIDER IS SELECTED. NO ADAPTER EXISTS.
 >
-> **Phase 1 contains zero live music-provider adapters.** `[ENG]`
+> **Phase 1 contains zero live music-provider adapters.** `[ENG]` The Phase 5.1 provider-registry table (`music_providers`) exists, but **no provider is registered and no adapter exists** (ADR-015).
 >
 > **Audius and Jamendo are UNVERIFIED candidates only.** `[ENG]` Neither is approved. No licensing claim, no API claim, and no availability claim is made about either.
 >
@@ -124,7 +124,7 @@ Without it, the application either (a) assumes full support and breaks on the fi
 ```
 ( provider_id , provider_external_id )  →  internal ECHO track identity
 ```
-**This is required from migration 001.** Retrofitting it later would require rewriting every reference to every catalogue entity across playlists, libraries, history, queues, votes, and recommendations. It is the single most expensive decision in the catalogue design.
+**This is required from the first catalogue migration.** Retrofitting it later would require rewriting every reference to every catalogue entity across playlists, libraries, history, queues, votes, and recommendations. It is the single most expensive decision in the catalogue design. The Phase 5.1 migrations V2 (`music_providers`) and V3 (`artists`/`albums`/`tracks`) implement it: every catalogue row is uniquely keyed `(provider_id, provider_external_id)` (ADR-015).
 
 ### 3.2 Multi-provider consequences `[ENG]`
 | Concern | Handling |
@@ -382,4 +382,4 @@ Provider fixtures are **recorded or hand-authored test doubles**, explicitly lab
 
 ---
 
-**End of music provider strategy. Zero adapters exist. Audius and Jamendo remain UNVERIFIED. No provider is approved.**
+**End of music provider strategy. Zero adapters exist. Audius and Jamendo remain UNVERIFIED. No provider is approved. The Phase 5.1 registry table exists but is empty (ADR-015).**
