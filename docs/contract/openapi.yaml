@@ -268,6 +268,44 @@ paths:
                 $ref: '#/components/schemas/ApiError'
       x-echo-implemented: true
 
+  /api/v1/catalog/jiosaavn/search:
+    get:
+      tags:
+        - catalog
+      operationId: searchJioSaavn
+      summary: Search tracks via the JioSaavn provider
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 10
+      responses:
+        200:
+          description: Track results.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tracks:
+                    type: array
+                    items:
+                      type: object
+        503:
+          description: Provider unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      x-echo-implemented: true
+
   # ---------------------------------------------------------------- planned
   # Phase 7 (Identity) — plans only. All marked x-echo-implemented: false.
   # Contained in this contract so the surface is visible and versioned; nothing here

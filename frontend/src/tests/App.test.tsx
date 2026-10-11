@@ -29,24 +29,26 @@ describe("App", () => {
     ).toBeTruthy();
   });
 
-  it("renders the main welcome heading", () => {
+  it("renders the hero section with welcome heading", () => {
     render(<App />);
     expect(
       screen.getByRole("heading", {
         level: 1,
-        name: /Music forevery moment\./,
+        name: /Music for every moment\./,
       })
     ).toBeTruthy();
   });
 
-  it("renders the discovery section", () => {
+  it("renders the hero eyebrow", () => {
     render(<App />);
-    expect(
-      screen.getByRole("heading", {
-        level: 2,
-        name: "Your next favorite starts here.",
-      })
-    ).toBeTruthy();
+    expect(screen.getByText("WELCOME TO ECHO")).toBeTruthy();
+  });
+
+  it("renders genre sections", () => {
+    render(<App />);
+    expect(screen.getByText("Lofi Beats")).toBeTruthy();
+    expect(screen.getByText("Chill Vibes")).toBeTruthy();
+    expect(screen.getByText("Electronic")).toBeTruthy();
   });
 
   it("renders the platform status check and the backend message", async () => {
@@ -59,6 +61,16 @@ describe("App", () => {
     ).toBeTruthy();
     expect(
       await screen.findByText("ECHO backend is running")
+    ).toBeTruthy();
+  });
+
+  it("renders the player section", () => {
+    render(<App />);
+    expect(
+      screen.getByRole("heading", {
+        level: 2,
+        name: "Play something.",
+      })
     ).toBeTruthy();
   });
 });

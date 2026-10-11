@@ -31,7 +31,6 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const [muted, setMuted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [buffered, setBuffered] = useState(0);
 
   useEffect(() => {
     if (!audioRef.current) {
@@ -71,11 +70,6 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({
     const onWaiting = () => setLoading(true);
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
-    const onProgress = () => {
-      if (audio.buffered.length > 0) {
-        setBuffered(audio.buffered.end(audio.buffered.length - 1));
-      }
-    };
 
     audio.addEventListener("timeupdate", onTime);
     audio.addEventListener("durationchange", onDur);
@@ -85,7 +79,6 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({
     audio.addEventListener("waiting", onWaiting);
     audio.addEventListener("play", onPlay);
     audio.addEventListener("pause", onPause);
-    audio.addEventListener("progress", onProgress);
 
     return () => {
       audio.removeEventListener("timeupdate", onTime);
@@ -96,7 +89,6 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({
       audio.removeEventListener("waiting", onWaiting);
       audio.removeEventListener("play", onPlay);
       audio.removeEventListener("pause", onPause);
-      audio.removeEventListener("progress", onProgress);
     };
   }, [onNext, hasNext]);
 
@@ -108,7 +100,6 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({
     setError(null);
     setCurrentTime(0);
     setDuration(0);
-    setBuffered(0);
     audio.src = track.audioUrl;
     audio.load();
     audio.volume = muted ? 0 : volume;
@@ -116,7 +107,7 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({
       setError("Click play to start");
       setLoading(false);
     });
-  }, [track, muted, volume]);
+  }, [track]);
 
   useEffect(() => {
     if (audioRef.current) {
@@ -189,14 +180,14 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({
           disabled={!hasPrev || !onPrev}
           aria-label="Previous"
         >
-          &#9664;&#9664;
+          ⏮
         </button>
         <button
           className="control-btn play-btn"
           onClick={toggle}
           aria-label={playing ? "Pause" : "Play"}
         >
-          {loading ? "..." : playing ? "❚❚" : "▶"}
+          {loading ? "⏳" : playing ? "⏸" : "▶"}
         </button>
         <button
           className="control-btn"
@@ -204,42 +195,34 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({
           disabled={!hasNext || !onNext}
           aria-label="Next"
         >
-          &#9654;&#9654;
+          ⏭
         </button>
       </div>
 
       <div className="player-progress">
         <span className="time">{formatTime(currentTime)}</span>
-        <div className="seek-wrapper">
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={progress}
-            onChange={seek}
-            className="seek-bar"
-            aria-label="Seek"
-            disabled={!isFinite(duration) || duration <= 0}
-          />
-          {buffered > 0 && duration > 0 && isFinite(duration) && (
-            <div
-              className="buffered-bar"
-              style={{ width: `${(buffered / duration) * 100}%` }}
-            />
-          )}
-        </div>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          value={progress}
+          onChange={seek}
+          className="seek-bar"
+          aria-label="Seek"
+          disabled={!isFinite(duration) || duration <= 0}
+        />
         <span className="time">{formatTime(duration)}</span>
       </div>
 
       <div className="player-volume">
         <button
           type="button"
-          className="volume-icon"
+          className="volume-btn"
           onClick={toggleMute}
           aria-label={muted ? "Unmute" : "Mute"}
           aria-pressed={muted}
         >
-          {muted ? "&#128263;" : displayVolume > 0.5 ? "&#128266;" : "&#128265;"}
+          {muted ? "🔇" : displayVolume > 0.5 ? "🔊" : "🔈"}
         </button>
         <input
           type="range"

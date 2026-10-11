@@ -1,20 +1,21 @@
 import React, { useState, useRef } from "react";
+import TrackCard, { type TrackResult } from "./TrackCard";
 
-export interface TrackResult {
-  id: string;
-  title: string;
-  artist: string;
-  album: string;
-  image: string;
-  audioUrl: string;
-}
+export { type TrackResult } from "./TrackCard";
 
 interface TrackSearchProps {
   onSelect: (track: TrackResult) => void;
+  onPlayNext?: (track: TrackResult) => void;
+  onAddToQueue?: (track: TrackResult) => void;
   currentTrackId?: string;
 }
 
-const TrackSearch: React.FC<TrackSearchProps> = ({ onSelect, currentTrackId }) => {
+const TrackSearch: React.FC<TrackSearchProps> = ({
+  onSelect,
+  onPlayNext,
+  onAddToQueue,
+  currentTrackId,
+}) => {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<TrackResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -31,11 +32,41 @@ const TrackSearch: React.FC<TrackSearchProps> = ({ onSelect, currentTrackId }) =
     setLoading(true);
     setError(null);
     try {
-      const resp = await fetch(`/api/v1/catalog/jamendo/search?q=${encodeURIComponent(q)}&limit=12`);
-      if (!resp.ok) throw new Error(`Search failed (${resp.status})`);
-      const data = await resp.json();
-      const tracks: TrackResult[] = data.tracks || [];
-      setResults(tracks);
+      const [audiusResp, jiosaavnResp] = await Promise.allSettled([
+        fetch(`/api/v1/catalog/jamendo/search?q=${encodeURIComponent(q)}&limit=12`),
+        fetch(`/api/v1/catalog/jiosaavn/search?q=${encodeURIComponent(q)}&limit=12`),
+      ]);
+
+      let allTracks: TrackResult[] = [];
+
+      if (audiusResp.status === "fulfilled") {
+        const resp = audiusResp.value;
+        if (resp.ok) {
+          const data = await resp.json();
+          const tracks: TrackResult[] = (data.tracks || []).map(t => ({ ...t, provider: "audius" }));
+          allTracks = allTracks.concat(tracks);
+        }
+      }
+
+      if (jiosaavnResp.status === "fulfilled") {
+        const resp = jiosaavnResp.value;
+        if (resp.ok) {
+          const data = await resp.json();
+          const tracks: TrackResult[] = (data.tracks || []).map(t => ({ ...t, provider: "jiosaavn" }));
+          allTracks = allTracks.concat(tracks);
+        }
+      }
+
+      // Deduplicate by title + artist (case-insensitive)
+      const seen = new Set<string>();
+      const deduped = allTracks.filter(track => {
+        const key = `${track.title.toLowerCase()}|${track.artist.toLowerCase()}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      setResults(deduped);
       setSearched(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Search failed");
@@ -81,23 +112,16 @@ const TrackSearch: React.FC<TrackSearchProps> = ({ onSelect, currentTrackId }) =
       )}
 
       {results.length > 0 && (
-        <div className="search-results">
+        <div className="search-results" role="list">
           {results.map((track) => (
-            <button
-              key={track.id}
-              className={`track-card ${currentTrackId === track.id ? "active" : ""}`}
-              onClick={() => onSelect(track)}
-            >
-              {track.image && (
-                <img src={track.image} alt="" className="track-image" loading="lazy" />
-              )}
-              <div className="track-info">
-                <span className="track-title">{track.title}</span>
-                <span className="track-artist">{track.artist}</span>
-                {track.album && <span className="track-album">{track.album}</span>}
-              </div>
-              <span className="track-play-icon">&#9654;</span>
-            </button>
+            <TrackCard
+              key={`${track.provider}-${track.id}`}
+              track={track}
+              isActive={currentTrackId === track.id}
+              onPlay={onSelect}
+              onPlayNext={onPlayNext}
+              onAddToQueue={onAddToQueue}
+            />
           ))}
         </div>
       )}
