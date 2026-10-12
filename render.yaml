@@ -1,16 +1,20 @@
-# ECHO — Render blueprint: backend web service + managed PostgreSQL. [ENG]
-# Human-approved deploy slice (ADR-023). This does NOT close OPEN-07: production
-# hardening (backups/PITR verification, observability, RPO/RTO) stays Phase 27 work.
+# ECHO — Render blueprint: backend web service only. Database is Neon-managed
+# PostgreSQL, supplied as a dashboard secret (see SPRING_DATASOURCE_URL below).
+# [ENG] Human-approved deploy slice (ADR-023). This does NOT close OPEN-07:
+# production hardening (backups/PITR verification, observability, RPO/RTO)
+# stays Phase 27 work.
 #
 # Apply: Render dashboard -> New -> Blueprint -> point at this repo.
-# Secrets (JWT_PRIVATE_KEY_BASE64, JWT_PUBLIC_KEY_BASE64, CORS_ALLOWED_ORIGINS)
-# are sync:false on purpose — paste real values in the dashboard, never in git.
+# Secrets (SPRING_DATASOURCE_URL, JWT_PRIVATE_KEY_BASE64, JWT_PUBLIC_KEY_BASE64,
+# CORS_ALLOWED_ORIGINS) are sync:false on purpose — paste real values in the
+# dashboard, never in git.
 #
 # FREE-TIER WARNING [ASM]: verify Render's current free plans before relying on
-# them — free web services sleep when idle (cold starts) and free databases have
-# retention/size limits. If the free Postgres is time-limited or paid-only, that
-# violates the hard constraint "no trials/expiring tiers" (requirements §7.2)
-# and must be escalated, not silently accepted.
+# them — free web services sleep when idle (cold starts). No Render-managed
+# database is declared here: Render free PostgreSQL expires 30 days after
+# creation, which would violate the hard constraint "no trials/expiring tiers"
+# (requirements §7.2), so the persistent store is Neon (no time expiry stated;
+# verify quota at signup). Neon free-compute suspension preserves data.
 
 services:
   - type: web
@@ -23,12 +27,15 @@ services:
     healthCheckPath: /api/health
     autoDeployTrigger: commit
     envVars:
-      # Single variable is enough: DataSourceConfig extracts host, port, db,
-      # user, and password from this URL and converts it to JDBC format.
+      # Database: Neon-managed PostgreSQL, direct (non-pooler) connection URL,
+      # pasted in the Render dashboard, e.g.
+      # postgresql://<role>:<password>@<host>/<dbname>?sslmode=require
+      # DataSourceConfig converts it to JDBC, reads credentials from the URL
+      # userinfo, and fails fast when absent. No Render database is declared
+      # in this blueprint; the previous Render free database (expiring tier)
+      # must not be recreated as the permanent store.
       - key: SPRING_DATASOURCE_URL
-        fromDatabase:
-          name: echo-postgres
-          property: connectionString
+        sync: false
       - key: JAVA_OPTS
         value: "-XX:MaxRAMPercentage=75.0 -XX:+UseContainerSupport"
       - key: JWT_ISSUER
@@ -53,10 +60,3 @@ services:
       # https://echo-web.vercel.app
       - key: CORS_ALLOWED_ORIGINS
         sync: false
-
-databases:
-  - name: echo-postgres
-    plan: free
-    # Pinned to the version the Testcontainers suite verifies (PostgreSQL 16).
-    # pgvector arrives only with the Phase 19 migration — do NOT enable extensions.
-    postgresMajorVersion: "16"

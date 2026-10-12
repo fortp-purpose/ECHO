@@ -172,14 +172,14 @@ Read, in this order:
 | Item | Status |
 |---|---|
 | Phase | **6 — API contract and validation gate: complete**; **5.2 — Library persistence: complete** (HTTP surface deferred to Phase 11); **5.1 — Catalogue Core: complete** |
-| Code | **Frontend + backend present** — React 17.0.2 + Vite 8.3.1 landing page + `HealthCheck`; Spring Boot 4.1.1 app with `GET /api/health`, the `ApiError` envelope, a read-only catalogue API (`/api/v1/catalog/{tracks,artists,albums}/…`), and the library **application** layer `LibraryService` + domain/repository + the published `identity.UserDirectory` interface. No library HTTP controller exists yet (it requires auth/authz). A versioned OpenAPI contract (`docs/contract/openapi.yaml`) is validated by tests in both stacks (ADR-022): structure, marker completeness, unique operationIds, surface agreement, and schema fidelity (records + live wire JSON) |
+| Code | **Frontend + backend present** — React 17.0.2 + Vite 8.3.1 landing page + `HealthCheck`; Spring Boot 4.1.1 app with `GET /api/health`, the `ApiError` envelope, a read-only catalogue API (`/api/v1/catalog/{tracks,artists,albums}/…`), and the library **application** layer `LibraryService` + domain/repository + the published `identity.UserDirectory` interface. No library HTTP controller exists yet (it requires auth/authz). A versioned OpenAPI contract (`docs/contract/openapi.yaml`) is validated by tests in both stacks (ADR-022): structure, marker completeness, unique operationIds, surface agreement, and schema fidelity (records + live wire JSON). Outbound Audius/JioSaavn search integrations exist in-tree as `[ENG]` UNVERIFIED candidates (`OPEN-01` open; no availability or licensing claim). Deploy manifests present: `backend/Dockerfile` (Temurin 25, non-root, `$PORT`-aware healthcheck), `render.yaml` (backend service only; Neon-managed PostgreSQL via dashboard secret, no Render database), `frontend/vercel.json` (SPA fallback). The contract declares both search paths (ADR-022/023) |
 | Schema / migrations | **Flyway V1** (`users`), **V2** (`music_providers`), **V3** (`artists`, `albums`, `tracks`), **V4** (`library_items`) present; Testcontainers PostgreSQL 16 suite green |
 | Dependencies installed | **Yes** — frontend npm deps (`node_modules`) + backend Maven deps |
-| Containers / CI | **None** (Docker used locally for Testcontainers only). Contract validation runs in the local suites; CI wiring is Phase 26 |
-| Music-provider adapters | **Zero** — `CATALOG_PROVIDER_UNAVAILABLE` is the current state; no provider registered |
+| Containers / CI | **`backend/Dockerfile`, `render.yaml`, `frontend/vercel.json` present** (ADR-023); images build and smoke-test locally (Docker also serves Testcontainers). No CI; contract validation runs in the local suites; CI wiring is Phase 26 |
+| Music-provider adapters | **Outbound search clients present but UNVERIFIED** — `JamendoClient` (Audius) + `JioSaavnClient` exist in-tree; the `OPEN-01` verification gate is unmet, so no availability or licensing claim is made and `CATALOG_PROVIDER_UNAVAILABLE` remains the supported steady state |
 | AI integration | **Architecture only** — nothing installed |
-| Open decisions | 12 documented in `docs/requirements.md` §9; `OPEN-09`/`OPEN-10`/`OPEN-11` are **resolved** by ADR-017/018/019 with **explicit human approval recorded 2026-10-11 (ADR-021)**. `OPEN-01`–`OPEN-08` and `OPEN-12` remain open and gate later phases. Frontend router/query-cache/state/STOMP choices deferred and recorded in `docs/architecture-decisions.md` ADR-013. Contract tooling resolved by ADR-022 (not a numbered `OPEN`) |
-| Tests | **121 green** — 26 frontend (vitest/jsdom) + 95 backend (JUnit + Testcontainers) |
+| Open decisions | 12 documented in `docs/requirements.md` §9; `OPEN-09`/`OPEN-10`/`OPEN-11` are **resolved** by ADR-017/018/019 with **explicit human approval recorded 2026-10-11 (ADR-021)**. `OPEN-01`–`OPEN-08` and `OPEN-12` remain open and gate later phases. Frontend router/query-cache/state/STOMP choices deferred and recorded in `docs/architecture-decisions.md` ADR-013. Contract tooling resolved by ADR-022 (not a numbered `OPEN`). Deploy slice approved human-directed (ADR-023); `OPEN-07` stays open |
+| Tests | **118 backend + 31 frontend green** — backend re-verified Step 1 (JUnit + Testcontainers, 0 skipped); frontend 29 run green by default with 2 env-gated `VITE_API_BASE` cases skipped (each proven green under a provided value), vitest/jsdom |
 | **Next step** | **Phase 7 (Identity)** — the next independent milestone after the Phase 5/6 slices; library HTTP surface + object-level authz land in Phase 11. See `docs/implementation-roadmap.md` §2 (phases) and §7A (Phase 6) |
 | Pinned toolchain | | --- |
 | | **OpenJDK 25 LTS** — `[ENG]` Java version decided in Phase 2; ECHO.pdf §2 names "Java" generally for backend, but Java 25 LTS specific version is an engineering decision. |
@@ -207,7 +207,7 @@ Read, in this order:
 |---|---|
 | `ECHO.pdf` | The specification. Never edit |
 | `docs/requirements.md` | Tag legend, 35-feature traceability, hard constraints, PDF-silent areas, open decisions |
-| `docs/architecture-decisions.md` | ADR-001 … ADR-022 |
+| `docs/architecture-decisions.md` | ADR-001 … ADR-023 |
 | `docs/architecture.md` | Full system architecture, 26 sections |
 | `docs/contract/openapi.yaml` | Versioned OpenAPI 3.0.3 contract — source of truth for the REST surface (ADR-022) |
 | `docs/domain-model.md` | Conceptual entities, relationships, "entities that should NOT exist" |
