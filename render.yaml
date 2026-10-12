@@ -1,0 +1,62 @@
+# ECHO — Render blueprint: backend web service + managed PostgreSQL. [ENG]
+# Human-approved deploy slice (ADR-023). This does NOT close OPEN-07: production
+# hardening (backups/PITR verification, observability, RPO/RTO) stays Phase 27 work.
+#
+# Apply: Render dashboard -> New -> Blueprint -> point at this repo.
+# Secrets (JWT_PRIVATE_KEY_BASE64, JWT_PUBLIC_KEY_BASE64, CORS_ALLOWED_ORIGINS)
+# are sync:false on purpose — paste real values in the dashboard, never in git.
+#
+# FREE-TIER WARNING [ASM]: verify Render's current free plans before relying on
+# them — free web services sleep when idle (cold starts) and free databases have
+# retention/size limits. If the free Postgres is time-limited or paid-only, that
+# violates the hard constraint "no trials/expiring tiers" (requirements §7.2)
+# and must be escalated, not silently accepted.
+
+services:
+  - type: web
+    name: echo-backend
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      # Single variable is enough: DataSourceConfig extracts host, port, db,
+      # user, and password from this URL and converts it to JDBC format.
+      - key: SPRING_DATASOURCE_URL
+        fromDatabase:
+          name: echo-postgres
+          property: connectionString
+      - key: JAVA_OPTS
+        value: "-XX:MaxRAMPercentage=75.0 -XX:+UseContainerSupport"
+      - key: JWT_ISSUER
+        value: echo
+      - key: JWT_AUDIENCE
+        value: echo-clients
+      - key: JWT_KID
+        value: key-1
+      # Base64-encoded RSA keys (DER bytes, no PEM headers). Generate locally
+      # with Git Bash / WSL, paste the single-line outputs in the dashboard:
+      #   openssl genrsa -out private.pem 2048
+      #   openssl pkcs8 -topk8 -inform PEM -in private.pem -outform DER -nocrypt | base64 -w0
+      #     -> JWT_PRIVATE_KEY_BASE64 (PKCS#8, matches KeyRotationService)
+      #   openssl rsa -in private.pem -pubout -outform DER | base64 -w0
+      #     -> JWT_PUBLIC_KEY_BASE64 (X.509, matches KeyRotationService)
+      # Unused by current code (no token issuance yet); required from Phase 7.
+      - key: JWT_PRIVATE_KEY_BASE64
+        sync: false
+      - key: JWT_PUBLIC_KEY_BASE64
+        sync: false
+      # Set AFTER the Vercel deploy, then redeploy this service, e.g.:
+      # https://echo-web.vercel.app
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+
+databases:
+  - name: echo-postgres
+    plan: free
+    # Pinned to the version the Testcontainers suite verifies (PostgreSQL 16).
+    # pgvector arrives only with the Phase 19 migration — do NOT enable extensions.
+    postgresMajorVersion: "16"

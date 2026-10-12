@@ -59,7 +59,15 @@ const TrackCard: React.FC<TrackCardProps> = ({
         onClick={() => onPlay(track)}
       >
         {track.image && (
-          <img src={track.image} alt="" className="track-image" loading="lazy" />
+          <img
+            src={track.image}
+            alt=""
+            className="track-image"
+            loading="lazy"
+            onError={(e) => {
+              e.currentTarget.style.visibility = "hidden";
+            }}
+          />
         )}
         <div className="track-info">
           <span className="track-title">{track.title}</span>

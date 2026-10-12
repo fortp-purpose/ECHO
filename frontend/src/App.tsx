@@ -4,6 +4,7 @@ import PlayerSection from "./features/player/PlayerSection";
 import HomePage from "./features/player/HomePage";
 import BottomPlayer from "./features/player/BottomPlayer";
 import type { TrackResult } from "./features/player/TrackCard";
+import { apiUrl } from "./api/client";
 
 const App: React.FC = () => {
   const [currentTrack, setCurrentTrack] = useState<TrackResult | null>(null);
@@ -144,9 +145,12 @@ const GlobalSearch: React.FC<{ onSelect: (track: TrackResult) => void; currentTr
     setLoading(true);
     setError(null);
     try {
+      // apiUrl() carries VITE_API_BASE in production (Vercel); the query string
+      // stays outside the literal so the contract gate still resolves the path.
+      const query = `?q=${encodeURIComponent(q)}&limit=12`;
       const [audiusResp, jiosaavnResp] = await Promise.allSettled([
-        fetch(`/api/v1/catalog/jamendo/search?q=${encodeURIComponent(q)}&limit=12`),
-        fetch(`/api/v1/catalog/jiosaavn/search?q=${encodeURIComponent(q)}&limit=12`),
+        fetch(apiUrl("/v1/catalog/jamendo/search") + query),
+        fetch(apiUrl("/v1/catalog/jiosaavn/search") + query),
       ]);
 
       let allTracks: TrackResult[] = [];
@@ -236,7 +240,15 @@ const GlobalSearch: React.FC<{ onSelect: (track: TrackResult) => void; currentTr
               aria-selected={currentTrackId === track.id}
             >
               {track.image && (
-                <img src={track.image} alt="" className="track-image" loading="lazy" />
+                <img
+                  src={track.image}
+                  alt=""
+                  className="track-image"
+                  loading="lazy"
+                  onError={(e) => {
+                    e.currentTarget.style.visibility = "hidden";
+                  }}
+                />
               )}
               <div className="track-info">
                 <span className="track-title">{track.title}</span>

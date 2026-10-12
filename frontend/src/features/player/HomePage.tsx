@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import TrackCard, { type TrackResult } from "./TrackCard";
+import { apiUrl } from "../../api/client";
 
 interface TrackRowProps {
   title: string;
@@ -113,9 +114,12 @@ const HomePage: React.FC<{
   const fetchGenre = useCallback(async (query: string, title: string) => {
     setLoadingGenres((prev) => ({ ...prev, [title]: true }));
     try {
+      // apiUrl() carries VITE_API_BASE in production (Vercel); the query string
+      // stays outside the literal so the contract gate still resolves the path.
+      const params = `?q=${encodeURIComponent(query)}&limit=10`;
       const [audiusResp, jiosaavnResp] = await Promise.allSettled([
-        fetch(`/api/v1/catalog/jamendo/search?q=${encodeURIComponent(query)}&limit=10`),
-        fetch(`/api/v1/catalog/jiosaavn/search?q=${encodeURIComponent(query)}&limit=10`),
+        fetch(apiUrl("/v1/catalog/jamendo/search") + params),
+        fetch(apiUrl("/v1/catalog/jiosaavn/search") + params),
       ]);
 
       let allTracks: TrackResult[] = [];

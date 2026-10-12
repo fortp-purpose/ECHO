@@ -3,10 +3,13 @@ package echo.jiosaavn;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -15,11 +18,40 @@ public class JioSaavnClient {
 
     private static final Logger log = LoggerFactory.getLogger(JioSaavnClient.class);
 
-    private final RestClient http = RestClient.create("https://saavn.sumit.co/api");
+    private static final String BASE_URL = "https://saavnx.vercel.app/api";
+
+    private final RestClient http;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
+    public JioSaavnClient() {
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+        requestFactory.setReadTimeout(Duration.ofSeconds(8));
+
+        this.http = RestClient.builder()
+                .baseUrl(BASE_URL)
+                .requestFactory(requestFactory)
+                .build();
+    }
+
     public List<JioSaavnTrack> search(String query, int limit) {
+        // The public JioSaavn mirrors occasionally drop a connection (cold start
+        // or DNS hiccup). Retry a couple of times before giving up so a single
+        // failed attempt does not empty the search results.
+        List<JioSaavnTrack> tracks = List.of();
+        for (int attempt = 0; attempt < 3; attempt++) {
+            tracks = searchOnce(query, limit);
+            if (!tracks.isEmpty()) {
+                return tracks;
+            }
+        }
+        return tracks;
+    }
+
+    private List<JioSaavnTrack> searchOnce(String query, int limit) {
         try {
             String uri = UriComponentsBuilder.fromPath("/search/songs")
                     .queryParam("query", query)
@@ -34,7 +66,6 @@ public class JioSaavnClient {
                     .body(String.class);
 
             log.debug("JioSaavn search response length: {}", body != null ? body.length() : 0);
-            log.debug("JioSaavn search response preview: {}", body != null ? body.substring(0, Math.min(500, body.length())) : "null");
 
             if (body == null || body.isBlank()) {
                 return List.of();
@@ -42,7 +73,7 @@ public class JioSaavnClient {
 
             return parseTracks(body);
         } catch (Exception e) {
-            log.warn("JioSaavn search failed for query '{}': {}", query, e.getMessage(), e);
+            log.warn("JioSaavn search attempt failed for query '{}': {}", query, e.getMessage());
             return List.of();
         }
     }

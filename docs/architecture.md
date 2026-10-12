@@ -898,7 +898,7 @@ Horizontal on the stateless backend tier; managed scaling for database and cache
 | Topic | Document |
 |---|---|
 | Requirement traceability, 35-feature map, constraints | `requirements.md` |
-| ADR-001…ADR-022 | `architecture-decisions.md` |
+| ADR-001…ADR-023 | `architecture-decisions.md` |
 | Entities, cardinality, ownership, lifecycle | `domain-model.md` |
 | REST conventions, errors, pagination, rate limits | `api-strategy.md` |
 | Machine-readable REST contract (OpenAPI) | `contract/openapi.yaml` |

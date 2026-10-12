@@ -1,5 +1,6 @@
 import React, { useState, useRef } from "react";
 import TrackCard, { type TrackResult } from "./TrackCard";
+import { apiUrl } from "../../api/client";
 
 export { type TrackResult } from "./TrackCard";
 
@@ -32,9 +33,12 @@ const TrackSearch: React.FC<TrackSearchProps> = ({
     setLoading(true);
     setError(null);
     try {
+      // apiUrl() carries VITE_API_BASE in production (Vercel); the query string
+      // stays outside the literal so the contract gate still resolves the path.
+      const params = `?q=${encodeURIComponent(q)}&limit=12`;
       const [audiusResp, jiosaavnResp] = await Promise.allSettled([
-        fetch(`/api/v1/catalog/jamendo/search?q=${encodeURIComponent(q)}&limit=12`),
-        fetch(`/api/v1/catalog/jiosaavn/search?q=${encodeURIComponent(q)}&limit=12`),
+        fetch(apiUrl("/v1/catalog/jamendo/search") + params),
+        fetch(apiUrl("/v1/catalog/jiosaavn/search") + params),
       ]);
 
       let allTracks: TrackResult[] = [];

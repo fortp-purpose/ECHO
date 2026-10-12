@@ -46,6 +46,7 @@ An ADR with status `Proposed` still contains an `[OPEN]` item and **must not** b
 | ADR-020 | Library persistence foundation (Phase 5.2) | Accepted |
 | ADR-021 | Approval record: explicit human approval of `OPEN-09`/`OPEN-10`/`OPEN-11` | Accepted — confirms ADR-017/018/019 |
 | ADR-022 | API contract tooling: hand-authored OpenAPI as the single source of truth, validated in CI-gated tests | Accepted — resolves the Phase 6 "Contract tooling" open item |
+| ADR-023 | PaaS deploy slice: backend + PostgreSQL on Render, frontend on Vercel | Accepted — human-directed; does NOT close `OPEN-07` |
 
 ---
 
@@ -1202,6 +1203,48 @@ A contract is only a contract if drift is *detected*; nothing in the project cur
 | Phase 7 identity endpoints described as `x-echo-implemented: false` are mistaken for real surface | Medium | Marker is machine-checked (frontend test enforces the auth fragment stays false); the contract description states planned endpoints are documentation only |
 | Actuator endpoints appear in the real mapping and confuse the gate | Low | Comparison scoped to `/api/**`; actuator is infrastructure, documented as excluded |
 
+# ADR-023 — PaaS deploy slice: backend + PostgreSQL on Render, frontend on Vercel
+
+**Status:** Accepted — human-directed by explicit project-owner request (deploy Render + Vercel).
+
+### Context
+`OPEN-07` (hosting target) is still formally open and Phase 27 owns production hardening, but the project owner explicitly directed a deployable slice now: backend + PostgreSQL on Render, frontend on Vercel. Prior sessions left the tree half-ready: `DataSourceConfig` never applied Render credentials embedded in `DATABASE_URL`, the `CorsFilter` bean was not wired into Spring Security (preflight risk), three frontend files bypassed the `VITE_API_BASE` seam with hardcoded `/api` fetches (broken under any non-proxied host), and the Dockerfile healthcheck probed a hardcoded port while Render injects `$PORT`.
+
+### Decision
+- Render: Docker web service (`backend/Dockerfile`) + managed PostgreSQL, wired by `render.yaml` blueprint. One variable carries the database: `SPRING_DATASOURCE_URL` injected via `fromDatabase ... property: connectionString`; `DataSourceConfig` converts `postgres://`/`postgresql://` to JDBC and reads credentials from the URL userinfo (URL-decoded) with env fallback, failing fast when absent. Small pool default (`DB_POOL_MAX=5`) for connection-limited managed databases.
+- Render health check targets `GET /api/health` (public, no auth); `/actuator` stays locked down. `server.forward-headers-strategy=framework` + graceful shutdown added for life behind Render's router.
+- Vercel: `frontend/` as project root, `VITE_API_BASE=https://<backend>.onrender.com/api`, SPA rewrite in `frontend/vercel.json`. The three hardcoded player fetches now build URLs via `apiUrl()` with the query string appended outside the literal, so the Phase 6 contract gate still resolves the paths.
+- Secrets (`JWT_*_BASE64`, `CORS_ALLOWED_ORIGINS`) are `sync:false` in the blueprint — pasted in dashboards, never in git. Redis is NOT provisioned: no production code touches Redis yet, the app boots without it, and PostgreSQL remains the sole system of record.
+- JWT key material properties (`echo.jwt.private-key-base64`) are wired to env but optional until Phase 7 issues tokens.
+
+### Alternatives
+1. **Single-host Docker Compose on a VPS** — rejected for this slice. Cheaper long-term and matches deployment-strategy §15 single-host variant, but the owner asked for Render + Vercel explicitly.
+2. **Provision Render Key Value (Redis) now** — rejected. Nothing reads Redis; provisioning an unused managed service adds cost/ops surface for zero benefit. Revisit when Phase 7+ session/revocation or Phase 15+ presence needs it.
+3. **Bake `VITE_API_BASE` or CORS origins into the repo** — rejected. Origins differ per environment; values live in dashboards. `.env.example` carries names only.
+4. **Run Flyway per-replica at startup as the migration strategy** — accepted only for the single-instance slice (Flyway locking makes it safe); multi-replica gated migrations stay a Phase 26/27 concern.
+
+### Reasons
+- Smallest change that makes both PaaS targets work without touching product behaviour, the contract, or the locked stacks.
+- Single-variable database wiring removes the credential-duplication failure mode (URL creds vs separate user/pass vars disagreeing).
+- Keeping one CORS mechanism (`CorsConfigurationSource` + `http.cors()`) avoids duplicated `Access-Control-Allow-Origin` headers, which browsers reject.
+- `apiUrl()`-based fetches keep the frontend contract gate covering the search paths instead of bypassing it.
+
+### Consequences
+- New files: `render.yaml`, `frontend/vercel.json`. Changed: `DataSourceConfig` (credential resolution + pool sizing; `convertToJdbcUrl` behaviour unchanged), `CorsConfig` (source bean replaces filter bean), `SecurityConfig` (`http.cors()` + OPTIONS permitAll), `application.properties` (`DATABASE_URL` fallback, JWT key wiring, forwarded headers, graceful shutdown), `backend/Dockerfile` (wrapper build, `$PORT`-aware healthcheck, `JAVA_OPTS`), three frontend fetch sites, `.env.example` names.
+- Deploy order is fixed: Render database → backend → Vercel frontend with `VITE_API_BASE` → set `CORS_ALLOWED_ORIGINS` to the Vercel origin → redeploy backend.
+- Free-tier sleep/cold-starts and database limits are accepted for the slice; production hardening (PITR verification, observability, RPO/RTO) is still Phase 27 work.
+
+### Risks
+| Risk | Severity | Mitigation |
+|---|---|---|
+| Render/Vercel free-tier limits or expiry violate the no-trials/expiring-tiers constraint | High if unguarded | `render.yaml` header + runbook flag it as `[ASM]` to verify at deploy time; time-limited Postgres must be escalated, not silently accepted |
+| `CORS_ALLOWED_ORIGINS` not updated to the Vercel origin after deploy | Medium | Runbook makes it a blocking step; misconfiguration fails loudly in the browser console, not silently |
+| Vercel preview deployments get new origins not on the allowlist | Low | Add preview origin to `CORS_ALLOWED_ORIGINS` and redeploy backend; no code change needed |
+| Single-instance Flyway-at-startup assumed | Low | True for this slice (one Render instance); revisit before any multi-replica topology |
+
+### Unresolved parameters (deferred, not architectural)
+Region choice (`oregon` default) · Render plan upgrades · Vercel project name/origin (owner picks) · Redis provisioning timing · CI wiring (Phase 26) · backup/PITR proof (Phase 27).
+
 ## ADR cross-cutting summary
 
 | Concern | Locked by PDF | Engineering decision | Open |
@@ -1218,10 +1261,10 @@ A contract is only a contract if drift is *detected*; nothing in the project cur
 | Auth | Spring Security, JWT/OAuth named | JWT + rotating refresh | Lifetimes, key rotation, password policy |
 | API | — | REST/JSON, `/api/v1`, error contract; **hand-authored OpenAPI in `docs/contract/openapi.yaml`, validated by the backend and frontend contract gates (ADR-022)** | — (contract tooling resolved; **schema fidelity — records and wire JSON — is enforced**; deep JSON-Schema type validation remains out of scope) |
 | Testing | — | Layered + gates; **contract gates in both suites (ADR-022)** | — |
-| Deployment | — | Docker, vendor-neutral | `OPEN-07` target |
+| Deployment | — | Docker, vendor-neutral; Render + Vercel PaaS slice (ADR-023) | `OPEN-07` target (slice does not close it) |
 
 > **Approval note:** the `[OPEN]` decisions resolved by ADR-017/018/019 (`OPEN-09`/`OPEN-10`/`OPEN-11`) are confirmed by the explicit human approval recorded in **ADR-021**.
 
 ---
 
-**End of ADRs. Twenty-two records, ADR-001 … ADR-022. An ADR may only be changed by superseding it with a new record — never by editing history. Any change to a shared component, dependency, or protocol requires a new ADR.**
+**End of ADRs. Twenty-three records, ADR-001 … ADR-023. An ADR may only be changed by superseding it with a new record — never by editing history. Any change to a shared component, dependency, or protocol requires a new ADR.**
